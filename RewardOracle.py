@@ -9,7 +9,9 @@ class RewardOracle():
         
     def _reward(self, state, action):
         self.env.reset()
-        self.env.state = np.array(state, dtype = 'float32')
+        state = np.array(state, dtype = 'float32')
+        state = np.clip(state, self.env.observation_space.low, self.env.observation_space.high)
+        self.env.state = state
         _, r, _, _ = self.env.step(action)
         return r
     

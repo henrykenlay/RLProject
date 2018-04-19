@@ -1,15 +1,14 @@
 import numpy as np
 
-
-class RunningStat(object):
-    # http://www.johndcook.com/blog/standard_deviation/
+class RunningStatistics(object):
+    # Taken from from https://github.com/joschu/modular_rl/blob/master/modular_rl/running_stat.py
     def __init__(self, shape):
         self._n = 0
         self._M = np.zeros(shape)
         self._S = np.zeros(shape)
     
     def push(self, x):
-        x = np.asarray(x)
+        x = np.asarray(x, dtype = 'float32')
         assert x.shape == self._M.shape
         self._n += 1
         if self._n == 1:
