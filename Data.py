@@ -1,5 +1,4 @@
 from torch.utils.data import Dataset
-from Statistics import RunningStatistics
 from tqdm import tqdm
 import numpy as np
 import torch
@@ -8,88 +7,79 @@ import copy
 
 class Data(Dataset):
 
-    def __init__(self, X=None, y=None, fname=None, noise=0.001):
+    def __init__(self, noise=0.001, capacity = np.inf):
         super(Data, self).__init__()
         self.noise = noise
-        self.reset()
-        
-        if fname is not None:
-            self.load(fname)
-        elif X is not None:
-            self.push(X, y)
-        
+        self.capacity = capacity
+        self.data_pushed = 0
+        self.X = [] 
+        self.y = []        
+        self.statistics_calculated = False
         
     def pushTrajectory(self, trajectory):
         # trajectory is [s0, a0, s1, a1...,a_{T-2}, s_{T-1}] 
         X, y = [], []
         action_idx = list(range(1, len(trajectory), 2))
+        
         for i in action_idx:
             s = trajectory[i-1]
             a = trajectory[i]
             s_next = trajectory[i+1]
-            try:
-                X.append(np.concatenate((s, a)))
-            except:
-                pass
+            X.append(np.concatenate((s, a)))
             y.append(s_next - s)
         self.push(np.stack(X), np.stack(y))
         
     def push(self, X, y):
         X, y = X.astype('float32'), y.astype('float32')
-        if self.X is None:
-            self.X, self.y = X, y
-            self.Xstat = RunningStatistics(X.shape[1:])
-            self.ystat = RunningStatistics(y.shape[1:])
+        for X_item, y_item in zip(X, y):
+            self._push(X_item, y_item)
+            
+    def _push(self, X, y):
+        if self.data_pushed < self.capacity:
+            self.X.append(X)
+            self.y.append(y)
         else:
-            try:
-                self.X = np.concatenate((self.X, X))
-            except:
-                pass
-            self.y = np.concatenate((self.y, y))
-        self.update_stats(X, y)
-    
-    def update_stats(self, X, y):
-        for row in X:
-            self.Xstat.push(row)
-        for row in y:
-            self.ystat.push(row)
+            idx = int(self.data_pushed % self.capacity)
+            self.X[idx] = X
+            self.y[idx] = y
+        self.data_pushed += 1
+        self.statistics_calculated = False
+            
+    def calculate_statistics(self):
+        if not self.statistics_calculated:
+            self.X_mean, self.X_std = np.mean(self.X, 0), np.std(self.X, 0)
+            self.y_mean, self.y_std = np.mean(self.y, 0), np.std(self.y, 0)
+            self.statistics_calculated = True
     
     def __len__(self):
-        return self.X.shape[0]
+        return len(self.X)
     
     def __getitem__(self, idx):
         if idx >= self.__len__():
             return
+        
         X, y = self.X[idx], self.y[idx]
         # add noise
         X = X + np.random.normal(0, self.noise, X.shape)
         y = y + np.random.normal(0, self.noise, y.shape)
         # normalise
-        X = (X - self.Xstat.mean)/self.Xstat.std
-        y = (y - self.ystat.mean)/self.ystat.std
+        self.calculate_statistics()
+        X = (X - self.X_mean)/self.X_std, 
+        y = (y - self.y_mean)/self.y_std
         # typecast
         X = torch.from_numpy(np.array(X, dtype = 'float32'))
         y = torch.from_numpy(np.array(y, dtype = 'float32')) 
         return X, y
     
-    def save(self, fname):
-        np.savez('data/{}.npz'.format(fname), X = self.X, y = self.y)
-        
-    def load(self, fname):
-        npzfile = np.load('data/{}.npz'.format(fname))
-        self.reset()
-        self.push(npzfile['X'], npzfile['y'])
-        
-    def reset(self):
-        self.X, self.y, self.Xstat, self.ystat = None, None, None, None
-        
     def __add__(self, data):
-        new_data = Data(noise = np.mean([self.noise, data.noise]))
-        new_data.push(self.X, self.y)
-        new_data.push(data.X, data.y)
+        new_data = Data(capacity = data.capacity + self.capacity)
+        new_data.data_pushed = data.data_pushed + self.data_pushed
+        new_data.X = data.X + self.X
+        new_data.y = data.y + self.y
         return new_data
+        
     
-def get_random_data(env, num_rolls = 2, max_roll_length = 20):
+def get_random_data(env, num_rolls = 25, max_roll_length = 50):
     env = copy.deepcopy(env)
     D = Data()
     print('Generating D_rand')
@@ -113,10 +103,11 @@ if __name__ == '__main__':
     X2 = np.random.random((8, 5))
     y = np.random.random((10, 2))
     y2 = np.random.random((8, 2))
-    data = Data()
+    data = Data(capacity = 5)
     data.push(X, y)
-    data2 = Data(X2, y2)
-    data3 = data + data2
     get_array = lambda x : np.random.random((x,))
     trajectory = [get_array(2), get_array(3), get_array(2), get_array(3), get_array(2), get_array(3), get_array(2)]
-    data3.pushTrajectory(trajectory)
+    data.pushTrajectory(trajectory)
+    data2 = Data(capacity = 5)
+    data2.push(X2, y2)
+    data + data2
