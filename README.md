@@ -11,6 +11,6 @@
 ## Practical Issues
 
 - [x] Work out the proper data split in aggregation. (EDIT - turns out it's a 10-90 random data - current model split)
-- [ ] Maybe fix the dataset's size?
+- [x] Maybe fix the dataset's size?
 - [ ] Parallelise the trajectory sampling
 
