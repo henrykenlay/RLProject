@@ -9,7 +9,8 @@ from RewardOracle import RewardOracle
 
 class Agent():
     
-    def __init__(self, env, controller_K, controller_H):
+
+    def __init__(self, env, K=10, H=15, softmax = False, temp = 1):
         env = copy.deepcopy(env)
         self.observation_dim = env.observation_space.shape[0]
         self.action_dim = 1 if len(env.action_space.shape) == 0 else env.action_space.shape[0]
@@ -17,7 +18,8 @@ class Agent():
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.001)
         self.criterion = torch.nn.functional.mse_loss
         self.state = env.reset()
-        self.controller = MPCActionController(env, self.model, controller_K, controller_H)
+
+        self.controller = MPCActionController(env, self.model, K, H, softmax, temp)
         
     def train(self, data, num_iters):
         train_data = DataLoader(data, batch_size = 512, shuffle=True)
@@ -40,22 +42,30 @@ class Agent():
             
 class MPCActionController():
     
-    def __init__(self, env, model, K=10, H=15):
+    def __init__(self, env, model, K=10, H=15, softmax = False, temp = 1):
         self.env = env
         self.model = model
         self.K = K
         self.H = H
+        self.temp = temp
+        self.softmax = softmax
         self.reward_oracle = RewardOracle(env)
+        
         
     def choose_action(self, state):
         trajectories = self.generate_trajectories(state)
-        best_trajectory = self.choose_best_trajectory(trajectories)
-        action = best_trajectory[1]
+        trajectory_scores = [self.score_trajectory(trajectory) for trajectory in trajectories]
+        if self.softmax:
+            probabilities = self._softmax(trajectory_scores)
+            chosen_trajectory_idx = np.random.choice(list(range(len(trajectories))), p=probabilities.data)
+            chosen_trajectory = trajectories[chosen_trajectory_idx]
+        else:
+            chosen_trajectory = trajectories[np.argmax(trajectory_scores)]
+        action = chosen_trajectory[1]
         return action
         
     def generate_trajectories(self, state):
         trajectories = [self.generate_trajectory(state) for _ in range(self.K)]
-
         return trajectories
 
     def generate_trajectory(self, state):
@@ -68,16 +78,7 @@ class MPCActionController():
             state = state + self.model(model_input).data.numpy()
             trajectory.append(state)
         return trajectory
-        
-    def choose_best_trajectory(self, trajectories):
-        best_trajectory, best_score = None, -np.inf
-        for trajectory in trajectories:
-            score = self.score_trajectory(trajectory)
-            if score > best_score:
-                best_score = score
-                best_trajectory = trajectory
-        return best_trajectory
-        
+
     def score_trajectory(self, trajectory):
         reward = 0
         for action_idx in range(1, len(trajectory), 2):
@@ -85,4 +86,8 @@ class MPCActionController():
             state = trajectory[action_idx-1]
             reward += self.reward_oracle.reward(state, action)
         return reward
+    
+    def _softmax(self, inputs):
+        inputs = self.temp*np.array(inputs)
+        return torch.nn.functional.softmax(Variable(torch.from_numpy(inputs)), 0)
         

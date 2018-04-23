@@ -64,8 +64,8 @@ class Data(Dataset):
         y = y + np.random.normal(0, self.noise, y.shape)
         # normalise
         self.calculate_statistics()
-        X = (X - self.X_mean)/self.X_std, 
-        y = (y - self.y_mean)/self.y_std
+        X = (X - self.X_mean)/(self.X_std + 10e-9) 
+        y = (y - self.y_mean)/(self.y_std + 10e-9)
         # typecast
         X = torch.from_numpy(np.array(X, dtype = 'float32'))
         y = torch.from_numpy(np.array(y, dtype = 'float32')) 
