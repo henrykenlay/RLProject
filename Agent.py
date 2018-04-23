@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import copy
+#from tqdm import tqdm
 from Model import Model
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
@@ -8,7 +9,7 @@ from RewardOracle import RewardOracle
 
 class Agent():
     
-    def __init__(self, env):
+    def __init__(self, env, controller_K, controller_H):
         env = copy.deepcopy(env)
         self.observation_dim = env.observation_space.shape[0]
         self.action_dim = 1 if len(env.action_space.shape) == 0 else env.action_space.shape[0]
@@ -16,18 +17,23 @@ class Agent():
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.001)
         self.criterion = torch.nn.functional.mse_loss
         self.state = env.reset()
-        self.controller = MPCActionController(env, self.model)
+        self.controller = MPCActionController(env, self.model, controller_K, controller_H)
         
-    def train(self, data):
+    def train(self, data, num_iters):
         train_data = DataLoader(data, batch_size = 512, shuffle=True)
-        for i, (X, y) in enumerate(train_data):
-            X = Variable(X)
-            y = Variable(y, requires_grad=False)
-            yhat = self.model(X)
-            loss = self.criterion(y, yhat)
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+        for epoch in range(num_iters):
+            running_loss = 0.0
+            for i, (X, y) in enumerate(train_data):
+                X = Variable(X)
+                y = Variable(y, requires_grad=False)
+                yhat = self.model(X)
+                loss = self.criterion(y, yhat)
+                running_loss += loss.data[0]
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+            if (epoch % 10 == 0):
+                print("Train loss on epoch ", epoch, " = ", running_loss)
             
     def choose_action(self, state):
         return self.controller.choose_action(state)
