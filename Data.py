@@ -77,26 +77,6 @@ class Data(Dataset):
         new_data.X = data.X + self.X
         new_data.y = data.y + self.y
         return new_data
-        
-    
-def get_random_data(env, num_rolls = 25, max_roll_length = 50):
-    env = copy.deepcopy(env)
-    D = Data()
-    print('Generating D_rand')
-    for i in tqdm(range(num_rolls)):
-        s0 = env.reset()
-        trajectory = [s0,]
-        for i in range(max_roll_length):
-            action = env.action_space.sample()
-            trajectory.append(action)
-            observation, reward, done, _ = env.step(action)
-            trajectory.append(observation)
-            if done:
-                break
-        D.pushTrajectory(trajectory)    
-    print('Generated {} samples'.format(len(D)))
-    return D
-        
     
 if __name__ == '__main__':
     X = np.random.random((10, 5))
