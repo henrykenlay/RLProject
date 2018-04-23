@@ -48,21 +48,20 @@ class MPCActionController():
         return action
         
     def generate_trajectories(self, state):
-        trajectories = []
-        for _ in range(self.K):
-            trajectory = [state,]
-            for _ in range(self.H):
-                action = self.env.action_space.sample()
-                trajectory.append(action)
-                model_input = np.array(np.concatenate((state, action)), dtype='float32')
-                model_input = Variable(torch.from_numpy(model_input))
-                state = state + self.model(model_input).data.numpy()
-                trajectory.append(state)
-            trajectories.append(trajectory)
+        trajectories = [self.generate_trajectory(state) for _ in range(self.K)]
+
         return trajectories
-    
+
     def generate_trajectory(self, state):
-        pass
+        trajectory = [state,]
+        for _ in range(self.H):
+            action = self.env.action_space.sample()
+            trajectory.append(action)
+            model_input = np.array(np.concatenate((state, action)), dtype='float32')
+            model_input = Variable(torch.from_numpy(model_input))
+            state = state + self.model(model_input).data.numpy()
+            trajectory.append(state)
+        return trajectory
         
     def choose_best_trajectory(self, trajectories):
         best_trajectory, best_score = None, -np.inf
