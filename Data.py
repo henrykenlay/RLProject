@@ -1,9 +1,5 @@
 from torch.utils.data import Dataset
-from tqdm import tqdm
 import numpy as np
-import torch
-import copy
-
 
 class Data(Dataset):
 
@@ -12,82 +8,74 @@ class Data(Dataset):
         self.noise = noise
         self.capacity = capacity
         self.data_pushed = 0
-        self.X = [] 
-        self.y = []        
-        self.statistics_calculated = False
-        
+        self.transitions = []
+        self.statistics_need_calculating = True
+    
     def pushTrajectory(self, trajectory):
-        # trajectory is [s0, a0, s1, a1...,a_{T-2}, s_{T-1}] 
-        X, y = [], []
-        action_idx = list(range(1, len(trajectory), 2))
-        
-        for i in action_idx:
-            s = trajectory[i-1]
-            a = trajectory[i]
-            s_next = trajectory[i+1]
-            X.append(np.concatenate((s, a)))
-            y.append(s_next - s)
-        self.push(np.stack(X), np.stack(y))
-        
-    def push(self, X, y):
-        X, y = X.astype('float32'), y.astype('float32')
-        for X_item, y_item in zip(X, y):
-            self._push(X_item, y_item)
-            
-    def _push(self, X, y):
-        if self.data_pushed < self.capacity:
-            self.X.append(X)
-            self.y.append(y)
+        # trajectory is s0, a0, r0, s1, a1, r1.... r_{T-1}, S_T
+        for state_idx in range(3, len(trajectory), 3):
+            state = np.array(trajectory[state_idx-3], dtype = 'float32')
+            action = np.array(trajectory[state_idx-2], dtype = 'float32')
+            reward = float(trajectory[state_idx - 1])
+            next_state = np.array(trajectory[state_idx], dtype = 'float32')
+            transition = np.array([state, action, reward, next_state-state])
+            self.pushTransition(transition)
+    
+    def pushTransition(self, transition):
+        # transition is [state, action, reward, next_state]
+        if len(self.transitions) < self.capacity:
+            self.transitions.append(transition)
         else:
-            idx = int(self.data_pushed % self.capacity)
-            self.X[idx] = X
-            self.y[idx] = y
-        self.data_pushed += 1
-        self.statistics_calculated = False
+            self.transitions[self.data_pushed % self.capacity] = transition
+        self.data_pushed+= 1
+        self.statistics_need_calculating = True
             
     def calculate_statistics(self):
-        if not self.statistics_calculated:
-            self.X_mean, self.X_std = np.mean(self.X, 0), np.std(self.X, 0)
-            self.y_mean, self.y_std = np.mean(self.y, 0), np.std(self.y, 0)
-            self.statistics_calculated = True
+        if self.statistics_need_calculating:
+            # check these statistics are as expected...
+            self.means = [i for i in np.mean(self.transitions, 0)]
+            self.stds = [np.sqrt(i) for i in np.var(self.transitions, 0)]
+            self.statistics_need_calculating = False
     
     def __len__(self):
-        return len(self.X)
+        return len(self.transitions)
     
     def __getitem__(self, idx):
         if idx >= self.__len__():
-            return
+            return None
+        transition = self.transitions[idx]
+        transition = self.add_noise(transition)
+        transition = self.normalise_transition(transition)
+        transition = self.typecast(transition)
+        return [*transition]
+    
+    def add_noise(self, transition):
+        for i in [0, 1, 3]:
+            transition[i] = transition[i] + np.random.normal(0, self.noise, transition[i].shape)
+        return transition
         
-        X, y = self.X[idx], self.y[idx]
-        # add noise
-        X = X + np.random.normal(0, self.noise, X.shape)
-        y = y + np.random.normal(0, self.noise, y.shape)
-        # normalise
+    def normalise_transition(self, transition):
         self.calculate_statistics()
-        X = (X - self.X_mean)/(self.X_std + 10e-9) 
-        y = (y - self.y_mean)/(self.y_std + 10e-9)
-        # typecast
-        X = torch.from_numpy(np.array(X, dtype = 'float32'))
-        y = torch.from_numpy(np.array(y, dtype = 'float32')) 
-        return X, y
+        transition = (transition - self.means)/self.stds
+        return transition
+    
+    def typecast(self, transition):
+        for i in [0, 1, 3]:
+            transition[i] = np.array(transition[i], dtype='float32') 
+        return transition
     
     def __add__(self, data):
         new_data = Data(capacity = data.capacity + self.capacity)
         new_data.data_pushed = data.data_pushed + self.data_pushed
-        new_data.X = data.X + self.X
-        new_data.y = data.y + self.y
+        new_data.transitions = self.transitions + data.transitions
         return new_data
     
 if __name__ == '__main__':
-    X = np.random.random((10, 5))
-    X2 = np.random.random((8, 5))
-    y = np.random.random((10, 2))
-    y2 = np.random.random((8, 2))
     data = Data(capacity = 5)
-    data.push(X, y)
     get_array = lambda x : np.random.random((x,))
-    trajectory = [get_array(2), get_array(3), get_array(2), get_array(3), get_array(2), get_array(3), get_array(2)]
+    trajectory = [get_array(2), get_array(3), 5, 
+                  get_array(2), get_array(3), 2,
+                  get_array(2)]
     data.pushTrajectory(trajectory)
-    data2 = Data(capacity = 5)
-    data2.push(X2, y2)
-    data + data2
+    data.calculate_statistics()
+    data[0]

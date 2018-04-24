@@ -3,16 +3,27 @@ import torch
 
 class Model(torch.nn.Module):
      
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, state_dim, action_dim, return_reward_est = False):
         super(Model, self).__init__()
-        self.linear1 = torch.nn.Linear(input_dim, 500)
+        self.return_reward_est = return_reward_est
+        self.linear1 = torch.nn.Linear(state_dim + action_dim, 500)
         self.linear2 = torch.nn.Linear(500, 500)
-        self.linear3 = torch.nn.Linear(500, output_dim)
+        self.linear3 = torch.nn.Linear(500, state_dim)
+        if return_reward_est:
+            self.linear4 = torch.nn.Linear(500, 1)
         self.activation_fn = torch.nn.ReLU()
         
-    def forward(self, x):
+    def forward(self, state, action):
+        try:
+            x = torch.cat([state, action], 1)
+        except:
+            x = torch.cat([state, action])
         x = self.activation_fn(self.linear1(x))
         x = self.activation_fn(self.linear2(x))
-        x = self.linear3(x)
-        return x
+        s_diff = self.linear3(x)
+        if self.return_reward_est:
+            reward = self.linear4(x)
+            return s_diff, reward
+        else:
+            return s_diff
     

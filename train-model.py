@@ -16,12 +16,14 @@ parser.add_argument("--traj-per-agg", default=9, type=int, help="Number of rollo
 parser.add_argument("--traj-length", default=1000, type=int, help="Length of rollouts")
 parser.add_argument("--H", default=20, type=int, help="Horizon of the MPC controller")
 parser.add_argument("--K", default=250, type=int, help="Number of random rollouts of the MPC controller")
+parser.add_argument("--predict-reward", default=True, action="store_true", help="Use model to predict reward")
+
 args = parser.parse_args()
 
 env = gym.make(args.environment) 
 
 # Create model
-agent = MPCAgent(env = env, H = args.H, K = args.K, traj_length = args.traj_length, softmax = args.softmax)
+agent = MPCAgent(env = env, H = args.H, K = args.K, traj_length = args.traj_length, softmax = args.softmax, predict_rewards = args.predict_reward)
 
 # Main loops
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -37,7 +39,7 @@ for iteration in range(args.agg_iters):
         for t in tqdm(range(args.traj_length)):  
             action = agent.choose_action(state)
             new_state, reward, done, info = env.step(action)
-            agent.D_RL.pushTrajectory([state, action, new_state])
+            agent.D_RL.pushTrajectory([state, action, reward, new_state])
             state = new_state
             if args.render:
                 env.render()
