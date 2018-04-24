@@ -1,7 +1,10 @@
 from Agent import MPCAgent
 from tqdm import tqdm
 import gym
+import os
+import sys
 import argparse
+import pickle
 
 parser = argparse.ArgumentParser(description='Train a model using MPC')
 parser.add_argument('--environment', default='MountainCarContinuous-v0', help='Environment to train the agent on')
@@ -21,9 +24,13 @@ env = gym.make(args.environment)
 agent = MPCAgent(env = env, H = args.H, K = args.K, traj_length = args.traj_length, softmax = args.softmax)
 
 # Main loops
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+assets_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets'))
 
 for iteration in range(args.agg_iters):
     agent.train(num_epochs = 60)
+    if not args.experiment_name == '':
+        pickle.dump((agent.D_RL, agent.D_rand, agent.model), open(os.path.join(assets_dir, 'learned_models/{}-model.p'.format(args.environment)), 'wb'))
     state = env.reset()
     for _ in range(args.traj_per_agg):
         total_reward = 0
@@ -40,7 +47,6 @@ for iteration in range(args.agg_iters):
                 break
             total_reward += reward
         print('Trajectory done. Total reward: {}'.format(total_reward))
-    
-    
-if not args.experiment_name == '':
-    model_name = '{}-{}'.format(args.environment, args.model_suffix)
+
+
+
