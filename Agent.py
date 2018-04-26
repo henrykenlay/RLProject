@@ -127,13 +127,14 @@ class MPCAgent(Agent):
     def train(self, num_epochs):
         self.aggregate_data()
         train_data = DataLoader(self.D, batch_size = 512, shuffle=True)
+        
         for epoch in range(num_epochs):
             running_loss = 0.0
             for i, (state, action, reward, state_diff) in enumerate(train_data):
                 state = Variable(state)
                 action = Variable(action)
                 state_diff = Variable(state_diff, requires_grad=False)
-                reward = Variable(reward.float(), requires_grad = False)
+                reward = Variable(reward.float(), requires_grad=False)
                 if self.predict_rewards:
                     state_diff_hat, reward_hat = self.model(state, action)
                 else:

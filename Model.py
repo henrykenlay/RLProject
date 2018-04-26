@@ -14,10 +14,7 @@ class Model(torch.nn.Module):
         self.activation_fn = torch.nn.ReLU()
         
     def forward(self, state, action):
-        try:
-            x = torch.cat([state, action], 1)
-        except:
-            x = torch.cat([state, action])
+        x = torch.cat([state, action], 1)
         x = self.activation_fn(self.linear1(x))
         x = self.activation_fn(self.linear2(x))
         s_diff = self.linear3(x)

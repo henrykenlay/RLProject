@@ -44,8 +44,8 @@ class Data(Dataset):
         if idx >= self.__len__():
             return None
         transition = self.transitions[idx]
-        transition = self.add_noise(transition)
         transition = self.normalise_transition(transition)
+        transition = self.add_noise(transition)
         transition = self.typecast(transition)
         return [*transition]
     
