@@ -34,7 +34,7 @@ class Data(Dataset):
         if self.statistics_need_calculating:
             # check these statistics are as expected...
             self.means = [i for i in np.mean(self.transitions, 0)]
-            self.stds = [np.sqrt(i) for i in np.var(self.transitions, 0)]
+            self.stds = [np.clip(np.sqrt(i), 10e-9, np.inf) for i in np.var(self.transitions, 0)]
             self.statistics_need_calculating = False
     
     def __len__(self):
