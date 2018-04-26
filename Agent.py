@@ -48,8 +48,7 @@ class MPCAgent(Agent):
         self.H = H
         self.temperature = temperature
         self.softmax = softmax
-        if self.predict_rewards:
-            self.reward_oracle = RewardOracle(self.env)
+        self.reward_oracle = RewardOracle(self.env)
         
     def aggregate_data(self):
         self.D = self.D_rand + self.D_RL
@@ -57,14 +56,16 @@ class MPCAgent(Agent):
         
     def choose_action(self, state):
         trajectories = self.generate_trajectories(state)
-        trajectory_scores = [self.score_trajectory(trajectory) for trajectory in trajectories]
+        trajectory_scores = self.score_trajectories(trajectories)
+
         if self.softmax:
             probabilities = self._softmax(trajectory_scores)
             chosen_trajectory_idx = np.random.choice(list(range(len(trajectories))), p=probabilities.data)
             chosen_trajectory = trajectories[chosen_trajectory_idx]
         else:
-            chosen_trajectory = trajectories[np.argmax(trajectory_scores)]
-        action = chosen_trajectory[1]
+            best_traj = np.argmax(trajectory_scores)
+            action = trajectories[1][best_traj]
+
         return action
         
     def normalise_state(self, state):
@@ -84,33 +85,40 @@ class MPCAgent(Agent):
         return action
     
     def generate_trajectories(self, state):
+        trajectories = []
+
         state = self.normalise_state(state)
-        trajectories = [self.generate_trajectory(state) for _ in range(self.K)]
+        k_states = np.ones((self.K, self.observation_dim))
+        k_states = k_states*state
+        trajectories.append(k_states)
+
+        for _ in range(self.H):
+            k_actions = np.ones((self.K, self.action_dim))
+            for i in range(self.K):
+                action = self.normalise_action(self.env.action_space.sample())
+                k_actions[i] = action
+
+            trajectories.append(k_actions)
+            rewards = self.reward_oracle.reward(self.unnormalise_state(state), self.unnormalise_action(action))
+            state_vars = Variable(torch.from_numpy(k_states).float())
+            action_vars = Variable(torch.from_numpy(k_actions).float())
+            if self.predict_rewards:
+                s_diff, rewards = self.model(state_vars, action_vars)
+                s_diff, rewards = s_diff.data.numpy(), rewards.data.numpy()
+            else:
+                s_diff = self.model(state_vars, action_vars).data.numpy()
+
+            k_states = k_states + s_diff
+            trajectories.append(rewards)
+            trajectories.append(k_states)
+
         return trajectories
 
-    def generate_trajectory(self, state):
-        trajectory = [state,]
-        for _ in range(self.H):
-            action = self.normalise_action(self.env.action_space.sample())
-            trajectory.append(action)
-            reward = self.reward_oracle.reward(state, action)
-            state_var = Variable(torch.from_numpy(state).float())
-            action_var = Variable(torch.from_numpy(action).float())
-            if self.predict_rewards:
-                s_diff, reward = self.model(state_var, action_var)
-                s_diff, reward = s_diff.data.numpy(), reward.data.numpy()
-            else:
-                s_diff = self.model(state_var, action_var).data.numpy()
-            state = state + s_diff
-            trajectory.append(reward)
-            trajectory.append(state)
-        return trajectory
-
-    def score_trajectory(self, trajectory):
-        reward = 0
-        for reward_idx in range(2, len(trajectory), 3):
-            reward += trajectory[reward_idx]
-        return reward
+    def score_trajectories(self, trajectories):
+        rewards = np.zeros((self.K, 1))
+        for reward_idx in range(2, len(trajectories), 3):
+            rewards += trajectories[reward_idx]
+        return rewards
     
     def _softmax(self, inputs):
         inputs = self.temperature*np.array(inputs)
@@ -131,6 +139,7 @@ class MPCAgent(Agent):
                 else:
                     state_diff_hat = self.model(state, action)
                 loss = self.criterion(state_diff, state_diff_hat)
+                
                 if self.predict_rewards:
                     loss += self.criterion(reward, reward_hat)
                 running_loss += loss.data[0]
@@ -138,5 +147,8 @@ class MPCAgent(Agent):
                 loss.backward()
                 self.optimizer.step()
             if (epoch % 10 == 0):
+                # print("Calculated MSE: ", np.mean((state_diff.data.numpy() - state_diff_hat.data.numpy())**2, axis=0))
+                # print("Average Calculated MSE: ", np.mean((state_diff.data.numpy() - state_diff_hat.data.numpy())**2))
+                # print("MSE: ", loss.data[0])
                 print("Train loss on epoch ", epoch, " = ", running_loss)
         
