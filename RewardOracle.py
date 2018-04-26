@@ -6,6 +6,7 @@ class RewardOracle():
     
     def __init__(self, env):
         self.env = copy.deepcopy(env).unwrapped
+        self.obs_ndims = len(env.observation_space.shape)
         
     def _reward(self, state, action):
         self.env.reset()
@@ -16,15 +17,13 @@ class RewardOracle():
         return r
     
     def reward(self, state, action, repeats = 1):
-        """
-        Returns r(s, a)
-            
-        If the reward is stochastic then repeats can be set to a higher value 
-         and the reward will be estimated
-        
-        TODO: add warning if state/action outside of allowed env ranges
-        """
-        return np.mean([self._reward(state, action) for _ in range(repeats)])
+        if state.ndim > self.obs_ndims:
+            rewards = []
+            for s, a in zip(state, action):
+                rewards.append(self._reward(s, a))
+            return np.stack(rewards)  
+        else:
+            return self._reward(state, action)
         
 if __name__ == '__main__':
     env = gym.make('NChain-v0')
