@@ -57,15 +57,14 @@ class MPCAgent(Agent):
     def choose_action(self, state):
         trajectories = self.generate_trajectories(state)
         trajectory_scores = self.score_trajectories(trajectories)
-
         if self.softmax:
             probabilities = self._softmax(trajectory_scores)
-            chosen_trajectory_idx = np.random.choice(list(range(len(trajectories))), p=probabilities.data)
-            chosen_trajectory = trajectories[chosen_trajectory_idx]
+            chosen_trajectory_idx = np.random.choice(list(range(self.K)), p=probabilities.data)
+            #print('Action chosen with probability', probabilities[chosen_trajectory_idx].data[0])
+            # Logging the entropy of probabilities may be an interesting metric...
         else:
-            best_traj = np.argmax(trajectory_scores)
-            action = trajectories[1][best_traj]
-
+            chosen_trajectory_idx = np.argmax(trajectory_scores)
+        action = trajectories[1][chosen_trajectory_idx]
         return action
         
     def normalise_state(self, state):
@@ -83,39 +82,34 @@ class MPCAgent(Agent):
     def unnormalise_action(self, action):
         action = action*self.D.stds[1] + self.D.means[1]
         return action
-    
+
     def generate_trajectories(self, state):
-        trajectories = []
-
-        state = self.normalise_state(state)
-        k_states = np.ones((self.K, self.observation_dim))
-        k_states = k_states*state
-        trajectories.append(k_states)
-
+        states = np.expand_dims(self.normalise_state(state), 0).repeat(self.K, 0) # matrix of size K * state_dimensions, each row is the state
+        trajectories = [states, ]
         for _ in range(self.H):
-            k_actions = np.ones((self.K, self.action_dim))
-            for i in range(self.K):
-                action = self.normalise_action(self.env.action_space.sample())
-                k_actions[i] = action
-
-            trajectories.append(k_actions)
-            rewards = self.reward_oracle.reward(self.unnormalise_state(state), self.unnormalise_action(action))
-            state_vars = Variable(torch.from_numpy(k_states).float())
-            action_vars = Variable(torch.from_numpy(k_actions).float())
+            # sample actions
+            actions = np.stack([self.normalise_action(self.env.action_space.sample()) for _ in range(self.K)])
+            
+            # infer with model
+            state_vars = Variable(torch.from_numpy(states).float())
+            action_vars = Variable(torch.from_numpy(actions).float())
             if self.predict_rewards:
                 s_diff, rewards = self.model(state_vars, action_vars)
-                s_diff, rewards = s_diff.data.numpy(), rewards.data.numpy()
+                s_diff, rewards = s_diff.data.numpy(), rewards.data.numpy().squeeze()
             else:
+                rewards = self.reward_oracle.reward(self.unnormalise_state(states), self.unnormalise_action(actions))
                 s_diff = self.model(state_vars, action_vars).data.numpy()
 
-            k_states = k_states + s_diff
+            # update trajectory
+            states = states + s_diff
+            trajectories.append(actions)
             trajectories.append(rewards)
-            trajectories.append(k_states)
+            trajectories.append(states)
 
         return trajectories
 
     def score_trajectories(self, trajectories):
-        rewards = np.zeros((self.K, 1))
+        rewards = np.zeros((self.K,))
         for reward_idx in range(2, len(trajectories), 3):
             rewards += trajectories[reward_idx]
         return rewards
