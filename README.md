@@ -16,6 +16,6 @@
 - [x] Work out issue with reward oracle/gnerating and evaluating trajectories
 - [x] Reconsider how we combine D_rand and D_RL
 - [x] Actions are normalised by the net, but not normalised in our sampling - need to fix.
-- [ ] Maintain a persistent 90-10 D_RL - D_rand split after first iteration
-- [ ] Parallelise the trajectory sampling
+- [x] Maintain a persistent 90-10 D_RL - D_rand split after first iteration
+- [x] Parallelise the trajectory sampling (vectorized instead)
 
