@@ -138,13 +138,13 @@ class MPCAgent(Agent):
                 state_loss = self.criterion(state_diff_hat, state_diff)
                 
                 if self.predict_rewards:
-                    reward_loss = self.criterion(reward_hat, reward)
+                    reward_loss = self.criterion(reward_hat.squeeze(), reward)
                     loss = state_loss + reward_loss
-                    running_loss_reward += reward_loss.data[0]
+                    running_loss_reward += reward_loss.item()
                 else:
                     running_loss_reward = 0
                     loss = state_loss
-                running_loss_state += state_loss.data[0]
+                running_loss_state += state_loss.item()
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()

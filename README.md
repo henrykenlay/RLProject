@@ -17,5 +17,5 @@
 - [x] Reconsider how we combine D_rand and D_RL
 - [x] Actions are normalised by the net, but not normalised in our sampling - need to fix.
 - [ ] Maintain a persistent 90-10 D_RL - D_rand split after first iteration
-- [ ] Parallelise the trajectory sampling
+- [x] Parallelise the trajectory sampling (Vectorised for now)
 
