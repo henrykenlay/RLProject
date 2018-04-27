@@ -1,6 +1,7 @@
 import numpy as np
 import gym 
 import copy
+from multiprocessing import Pool
 
 class RewardOracle():
     
@@ -28,12 +29,19 @@ class RewardOracle():
     
     def _batch_reward3(self, states, actions):
         # this only works for 1d statespaces...
-        obs_dim = self.env.observation_space.shape[0]
         inputs = np.concatenate([states, actions], 1)
-        outputs = np.apply_along_axis(lambda x : self._reward(x[:obs_dim], x[obs_dim:]), 1, inputs)
+        outputs = np.apply_along_axis(self._vector_reward, 1, inputs)
         return outputs
     
+    def _batch_reward4(self, states, actions):
+        inputs = np.concatenate([states, actions], 1)
+        with Pool() as p:
+            rewards = p.map(self._vector_reward, inputs)
+        return rewards
     
+    def _vector_reward(self, x):
+        obs_dim = self.env.observation_space.shape[0]
+        return self._reward(x[:obs_dim], x[obs_dim:])
     
     def reward(self, state, action, repeats = 1):
         if state.ndim > self.obs_ndims:
@@ -42,7 +50,14 @@ class RewardOracle():
             return self._reward(state, action)
         
 if __name__ == '__main__':
-    env = gym.make('NChain-v0')
-    observation = env.reset()
+    env = gym.make('MountainCarContinuous-v0')
+    states = np.random.random((512, 2))
+    actions = np.random.random((512, 1))
     oracle = RewardOracle(env)
-    print(oracle.reward(4, 1, 100))
+    from time import time
+    times = []
+    for _ in range(100):
+        start = time()
+        rewards = oracle.reward(states, actions)
+        times.append(time() - start)
+    print(np.mean(times), np.std(times))
