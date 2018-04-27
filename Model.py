@@ -9,8 +9,7 @@ class Model(torch.nn.Module):
         self.linear1 = torch.nn.Linear(state_dim + action_dim, 500)
         self.linear2 = torch.nn.Linear(500, 500)
         self.linear3 = torch.nn.Linear(500, state_dim)
-        if return_reward_est:
-            self.linear4 = torch.nn.Linear(500, 1)
+        self.linear4 = torch.nn.Linear(500, 1)
         self.activation_fn = torch.nn.ReLU()
         
     def forward(self, state, action):
