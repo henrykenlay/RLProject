@@ -17,7 +17,7 @@ class Agent():
         self.model = Model(self.observation_dim, self.action_dim, predict_rewards)
         self.predict_rewards = predict_rewards
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.001)
-        self.criterion = torch.nn.functional.mse_loss
+        self.criterion = torch.nn.MSELoss()
         self.state = env.reset()
         self.D_RL = Data()
         self.D_rand = self.get_random_data(num_rolls, traj_length)
@@ -123,7 +123,7 @@ class MPCAgent(Agent):
         train_data = DataLoader(self.D, batch_size = 512, shuffle=True)
         
         for epoch in range(num_epochs):
-            running_loss = 0.0
+            running_loss_state, running_loss_reward = 0, 0
             for i, (state, action, reward, state_diff) in enumerate(train_data):
                 state = Variable(state)
                 action = Variable(action)
@@ -133,11 +133,16 @@ class MPCAgent(Agent):
                     state_diff_hat, reward_hat = self.model(state, action)
                 else:
                     state_diff_hat = self.model(state, action)
-                loss = self.criterion(state_diff, state_diff_hat)
+                state_loss = self.criterion(state_diff_hat, state_diff)
                 
                 if self.predict_rewards:
-                    loss += self.criterion(reward, reward_hat)
-                running_loss += loss.data[0]
+                    reward_loss = self.criterion(reward_hat, reward)
+                    loss = state_loss + reward_loss
+                    running_loss_reward += reward_loss.data[0]
+                else:
+                    running_loss_reward = 0
+                    loss = state_loss
+                running_loss_state += state_loss.data[0]
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
@@ -145,5 +150,6 @@ class MPCAgent(Agent):
                 # print("Calculated MSE: ", np.mean((state_diff.data.numpy() - state_diff_hat.data.numpy())**2, axis=0))
                 # print("Average Calculated MSE: ", np.mean((state_diff.data.numpy() - state_diff_hat.data.numpy())**2))
                 # print("MSE: ", loss.data[0])
-                print("Train loss on epoch ", epoch, " = ", running_loss)
+                print("Train loss on epoch ", epoch, " = ", running_loss_state, running_loss_reward)
         
+                
