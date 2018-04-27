@@ -84,6 +84,10 @@ class MPCAgent(Agent):
     def unnormalise_action(self, action):
         action = action*self.D.stds[1] + self.D.means[1]
         return action
+    
+    def normalize_reward(self, reward):
+        reward = (reward - self.D.means[2])/self.D.stds[2]
+        return reward
 
     def generate_trajectories(self, state):
         states = np.expand_dims(self.normalise_state(state), 0).repeat(self.K, 0) # matrix of size K * state_dimensions, each row is the state
@@ -100,6 +104,7 @@ class MPCAgent(Agent):
                 s_diff, rewards = s_diff.data.numpy(), rewards.data.numpy().squeeze()
             else:
                 rewards = self.reward_oracle.reward(self.unnormalise_state(states), self.unnormalise_action(actions))
+                rewards = self.normalize_reward(rewards)
                 s_diff = self.model(state_vars, action_vars).data.numpy()
 
             # update trajectory
