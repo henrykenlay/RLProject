@@ -18,5 +18,8 @@
 - [x] Actions are normalised by the net, but not normalised in our sampling - need to fix.
 - [x] Maintain a persistent 90-10 D_RL - D_rand split after first iteration
 - [x] Parallelise the trajectory sampling (vectorized instead)
+- [ ] Add some utilities to make it easier to evaluate the quality of the model and reward prediction
+- [ ] Add proper model-saving and trajectory-saving utilities
+- [ ] Add functionality to save videos of trajectories (makes it easier to qualitatively assess how it's doing)
 
 
