@@ -1,4 +1,5 @@
 from torch.utils.data import Dataset
+from functools import reduce
 import numpy as np
 
 class Data(Dataset):
@@ -70,6 +71,37 @@ class Data(Dataset):
         new_data.transitions = self.transitions + data.transitions
         return new_data
     
+class AggregatedData(Dataset):
+    
+    def __init__(self, datasets, probabilities = None):
+        super(AggregatedData, self).__init__()
+        self.D = reduce((lambda x,y:x+y), datasets) # adds all the datasets together
+        self.D.calculate_statistics()
+        self.datasets = datasets
+        self.calculate_statistics()
+        self.n = len(datasets)
+        if probabilities is None:
+            probabilities = [1/self.n for _ in range(self.n)]
+        self.probabilities = probabilities
+    
+    def calculate_statistics(self):
+        for data in self.datasets:
+            data.means = self.D.means
+            data.stds = self.D.stds
+            data.statistics_need_calculating = False
+        self.means = self.D.means
+        self.stds = self.D.stds
+    
+    def __len__(self):
+        return self.D.__len__()
+    
+    def __getitem__(self, idx):
+        dataset = []
+        dataset_idx = np.random.choice(list(range(self.n)), p = self.probabilities)
+        dataset = self.datasets[dataset_idx]
+        idx = np.random.randint(0, len(dataset))
+        return dataset[idx]
+    
 if __name__ == '__main__':
     data = Data(capacity = 5)
     get_array = lambda x : np.random.random((x,))
@@ -79,3 +111,7 @@ if __name__ == '__main__':
     data.pushTrajectory(trajectory)
     data.calculate_statistics()
     data[0]
+    data2 = Data()
+    data2.pushTrajectory(trajectory)
+    data3 = AggregatedData([data, data2])
+    data3[0]

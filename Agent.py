@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import copy
 from tqdm import tqdm
-from Data import Data
+from Data import Data, AggregatedData
 from Model import Model
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
@@ -51,8 +51,10 @@ class MPCAgent(Agent):
         self.reward_oracle = RewardOracle(self.env)
         
     def aggregate_data(self):
-        self.D = self.D_rand + self.D_RL
-        self.D.calculate_statistics()
+        if len(self.D_RL) > 0:
+            self.D = AggregatedData([self.D_rand, self.D_RL], probabilities = [0.1, 0.9])
+        else:
+            self.D = AggregatedData([self.D_rand,])
         
     def choose_action(self, state):
         trajectories = self.generate_trajectories(state)
