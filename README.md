@@ -22,7 +22,8 @@
 - [x] Parallelise the trajectory sampling (vectorized instead)
 - [ ] Parallelise reward oracle?
 - [ ] Add proper model-saving and trajectory-saving utilities
-- [ ] Add some utilities to make it easier to evaluate the quality of the model and reward prediction
+- [x] Add some utilities to make it easier to evaluate the quality of the model and reward prediction
 - [ ] Add functionality to save videos of trajectories (makes it easier to qualitatively assess how it's doing)
+- [ ] Add a clean way of saving and loading configs -> look at YAML configs in nn_dynamics
 
 
