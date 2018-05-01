@@ -7,10 +7,11 @@ from Model import Model
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
 from RewardOracle import RewardOracle
+from scipy.stats import entropy
 
 class Agent():
     
-    def __init__(self, env, traj_length = 100, num_rolls = 10, predict_rewards = False):
+    def __init__(self, env, traj_length = 100, num_rolls = 10, predict_rewards = False, writer = None):
         self.env = copy.deepcopy(env)
         self.observation_dim = env.observation_space.shape[0]
         self.action_dim = 1 if len(env.action_space.shape) == 0 else env.action_space.shape[0]
@@ -21,6 +22,7 @@ class Agent():
         self.state = env.reset()
         self.D_RL = Data()
         self.D_rand = self.get_random_data(num_rolls, traj_length)
+        self.writer = writer
 
     def get_random_data(self, num_rolls, traj_length):
         D = Data()
@@ -56,18 +58,18 @@ class MPCAgent(Agent):
         else:
             self.D = AggregatedData([self.D_rand,])
         
-    def choose_action(self, state):
+    def choose_action(self, state, iteration, t):
         trajectories = self.generate_trajectories(state)
         trajectory_scores = self.score_trajectories(trajectories)
+        probabilities = self._softmax(trajectory_scores)
+        if self.writer is not None:
+            self.writer.add_scalar('entropy/{}'.format(iteration), entropy(probabilities), t)
         if self.softmax:
-            probabilities = self._softmax(trajectory_scores)
             chosen_trajectory_idx = np.random.choice(list(range(self.K)), p=probabilities.data)
-            #print('Action chosen with probability', probabilities[chosen_trajectory_idx].data[0])
-            # Logging the entropy of probabilities may be an interesting metric...
         else:
-            chosen_trajectory_idx = np.argmax(trajectory_scores)
+            chosen_trajectory_idx = np.argmax(probabilities)
         action = trajectories[1][chosen_trajectory_idx]
-        return action
+        return self.unnormalise_action(action)
         
     def normalise_state(self, state):
         state = (state - self.D.means[0])/self.D.stds[0]
@@ -85,8 +87,12 @@ class MPCAgent(Agent):
         action = action*self.D.stds[1] + self.D.means[1]
         return action
     
-    def normalize_reward(self, reward):
+    def normalise_reward(self, reward):
         reward = (reward - self.D.means[2])/self.D.stds[2]
+        return reward
+    
+    def unnormalise_reward(self, reward):
+        reward = reward*self.D.stds[2] + self.D.means[2]
         return reward
 
     def generate_trajectories(self, state):
@@ -104,7 +110,7 @@ class MPCAgent(Agent):
                 s_diff, rewards = s_diff.data.numpy(), rewards.data.numpy().squeeze()
             else:
                 rewards = self.reward_oracle.reward(self.unnormalise_state(states), self.unnormalise_action(actions))
-                rewards = self.normalize_reward(rewards)
+                rewards = self.normalise_reward(rewards)
                 s_diff = self.model(state_vars, action_vars).data.numpy()
 
             # update trajectory
@@ -118,14 +124,14 @@ class MPCAgent(Agent):
     def score_trajectories(self, trajectories):
         rewards = np.zeros((self.K,))
         for reward_idx in range(2, len(trajectories), 3):
-            rewards += trajectories[reward_idx]
+            rewards += self.unnormalise_reward(trajectories[reward_idx])
         return rewards
     
     def _softmax(self, inputs):
         inputs = self.temperature*np.array(inputs)
         return torch.nn.functional.softmax(Variable(torch.from_numpy(inputs)), 0)
     
-    def train(self, num_epochs):
+    def train(self, num_epochs, iteration):
         self.aggregate_data()
         train_data = DataLoader(self.D, batch_size = 512, shuffle=True)
         
@@ -153,10 +159,7 @@ class MPCAgent(Agent):
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-            if (epoch % 10 == 0):
-                # print("Calculated MSE: ", np.mean((state_diff.data.numpy() - state_diff_hat.data.numpy())**2, axis=0))
-                # print("Average Calculated MSE: ", np.mean((state_diff.data.numpy() - state_diff_hat.data.numpy())**2))
-                # print("MSE: ", loss.data[0])
-                print("Train loss on epoch ", epoch, " = ", running_loss_state, running_loss_reward)
-        
+            if self.writer is not None:
+                self.writer.add_scalar('loss/state/{}'.format(iteration), running_loss_state, epoch)
+                self.writer.add_scalar('loss/reward/{}'.format(iteration), running_loss_reward, epoch)
                 
