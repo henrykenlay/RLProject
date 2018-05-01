@@ -58,12 +58,12 @@ class MPCAgent(Agent):
         else:
             self.D = AggregatedData([self.D_rand,])
         
-    def choose_action(self, state, iteration, t):
+    def choose_action(self, state, iteration, traj, t):
         trajectories = self.generate_trajectories(state)
         trajectory_scores = self.score_trajectories(trajectories)
         probabilities = self._softmax(trajectory_scores)
         if self.writer is not None:
-            self.writer.add_scalar('entropy/{}'.format(iteration), entropy(probabilities), t)
+            self.writer.add_scalar('entropy/{}-{}'.format(iteration, traj), entropy(probabilities), t)
         if self.softmax:
             chosen_trajectory_idx = np.random.choice(list(range(self.K)), p=probabilities.data)
         else:

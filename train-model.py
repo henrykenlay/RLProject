@@ -48,7 +48,7 @@ for iteration in range(args.agg_iters):
         total_reward = 0
         actions = [0,]
         for t in tqdm(range(args.traj_length)):
-            action = agent.choose_action(state, traj, t)
+            action = agent.choose_action(state, iteration, traj, t)
             new_state, reward, done, info = env.step(action)
             agent.D_RL.pushTrajectory([state, action, reward, new_state])
             state = new_state
