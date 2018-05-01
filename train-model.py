@@ -17,8 +17,8 @@ parser.add_argument("--agg-iters", default=9, type=int, help="Aggregation iterat
 parser.add_argument("--traj-per-agg", default=5, type=int, help="Number of rollouts per aggregation iterations")
 parser.add_argument("--traj-length", default=1000, type=int, help="Length of rollouts")
 parser.add_argument("--num-epochs", default=50, type=int, help="Number of epochs to train model")
-parser.add_argument("--H", default=20, type=int, help="Horizon of the MPC controller")
-parser.add_argument("--K", default=250, type=int, help="Number of random rollouts of the MPC controller")
+parser.add_argument("--H", default=10, type=int, help="Horizon of the MPC controller")
+parser.add_argument("--K", default=1000, type=int, help="Number of random rollouts of the MPC controller")
 parser.add_argument("--predict-reward", default=False, action="store_true", help="Use model to predict reward")
 parser.add_argument('--log-dir', default=None, metavar='LD', help='directory to output TensorBoard event file (default: runs/<DATETIME>)')
 
@@ -26,7 +26,7 @@ args = parser.parse_args()
 
 # create logs
 if args.log_dir is None:
-    args.log_dir = os.path.join('runs', datetime.now().strftime('%b%d_%H-%M-%S'))
+    args.log_dir = os.path.join('logs', datetime.now().strftime('%b%d_%H-%M-%S'))
 writer = SummaryWriter(log_dir=args.log_dir)
 
 # create env
@@ -53,11 +53,11 @@ for iteration in range(args.agg_iters):
             agent.D_RL.pushTrajectory([state, action, reward, new_state])
             state = new_state
             total_reward += reward
+            writer.add_scalar('total_reward/{}-{}'.format(iteration, traj), total_reward, t)
             if args.render:
                 env.render()
             if done:
                 break
-            writer.add_scalar('total_reward/{}-{}'.format(iteration, traj), total_reward, t)
         print('Trajectory done. Total reward: {}'.format(total_reward))
 
 
