@@ -8,6 +8,8 @@ from torch.utils.data import DataLoader
 from torch.autograd import Variable
 from RewardOracle import RewardOracle
 from scipy.stats import entropy
+from torch.distributions.categorical import Categorical
+
 
 class Agent():
     
@@ -17,11 +19,12 @@ class Agent():
         self.action_dim = 1 if len(env.action_space.shape) == 0 else env.action_space.shape[0]
         self.model = Model(self.observation_dim, self.action_dim, predict_rewards)
         self.predict_rewards = predict_rewards
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.001)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.1)
         self.criterion = torch.nn.MSELoss()
+        self.reinforce_criterion = torch.nn.CrossEntropyLoss(reduce=False)
         self.state = env.reset()
         self.D_RL = Data()
-        self.D_rand = self.get_random_data(num_rolls, traj_length)
+        self.D_rand = self.get_random_data(10, 1000)
         self.writer = writer
 
     def get_random_data(self, num_rolls, traj_length):
@@ -52,6 +55,10 @@ class MPCAgent(Agent):
         self.softmax = softmax
         self.reward_oracle = RewardOracle(self.env)
         
+    def reset_reinforce(self):
+        self.logits = []
+        self.action_idx = []
+        
     def aggregate_data(self):
         if len(self.D_RL) > 0:
             self.D = AggregatedData([self.D_rand, self.D_RL], probabilities = [0.1, 0.9])
@@ -59,16 +66,22 @@ class MPCAgent(Agent):
             self.D = AggregatedData([self.D_rand,])
         
     def choose_action(self, state, iteration, traj, t):
+        state = torch.tensor(state, requires_grad=True).float()
         trajectories = self.generate_trajectories(state)
         trajectory_scores = self.score_trajectories(trajectories)
         probabilities = self._softmax(trajectory_scores)
         if self.writer is not None:
-            self.writer.add_scalar('entropy/{}-{}'.format(iteration, traj), entropy(probabilities), t)
+            pass
+            #TODO fix
+            #self.writer.add_scalar('entropy/{}-{}'.format(iteration, traj), entropy(probabilities), t)
         if self.softmax:
-            chosen_trajectory_idx = np.random.choice(list(range(self.K)), p=probabilities.data)
+            #chosen_trajectory_idx = np.random.choice(list(range(self.K)), p=probabilities.data)
+            chosen_trajectory_idx = Categorical(probabilities.squeeze()).sample()
         else:
             chosen_trajectory_idx = np.argmax(probabilities)
-        action = trajectories[1][chosen_trajectory_idx]
+        self.logits.append(probabilities)
+        self.action_idx.append(chosen_trajectory_idx)
+        action = trajectories[1][chosen_trajectory_idx].detach().numpy()
         return self.unnormalise_action(action)
         
     def normalise_state(self, state):
@@ -96,19 +109,18 @@ class MPCAgent(Agent):
         return reward
 
     def generate_trajectories(self, state):
-        states = np.expand_dims(self.normalise_state(state), 0).repeat(self.K, 0) # matrix of size K * state_dimensions, each row is the state
+        states = state.unsqueeze(0).repeat(self.K, 1) # matrix of size K * state_dimensions, each row is the state
         trajectories = [states, ]
         for _ in range(self.H):
             # sample actions
             actions = np.stack([self.normalise_action(self.env.action_space.sample()) for _ in range(self.K)])
             
             # infer with model
-            state_vars = Variable(torch.from_numpy(states).float())
-            action_vars = Variable(torch.from_numpy(actions).float())
+            actions = torch.tensor(actions, requires_grad=True).float()
             if self.predict_rewards:
-                s_diff, rewards = self.model(state_vars, action_vars)
-                s_diff, rewards = s_diff.data.numpy(), rewards.data.numpy().squeeze()
+                s_diff, rewards = self.model(states, actions)
             else:
+                # TODO: this is probably broken now
                 rewards = self.reward_oracle.reward(self.unnormalise_state(states), self.unnormalise_action(actions))
                 rewards = self.normalise_reward(rewards)
                 s_diff = self.model(state_vars, action_vars).data.numpy()
@@ -122,19 +134,18 @@ class MPCAgent(Agent):
         return trajectories
 
     def score_trajectories(self, trajectories):
-        rewards = np.zeros((self.K,))
+        rewards = torch.zeros((self.K, 1), requires_grad=True)
         for reward_idx in range(2, len(trajectories), 3):
-            rewards += self.unnormalise_reward(trajectories[reward_idx])
+            rewards = rewards + self.unnormalise_reward(trajectories[reward_idx])
         return rewards
     
     def _softmax(self, inputs):
-        inputs = self.temperature*np.array(inputs)
-        return torch.nn.functional.softmax(Variable(torch.from_numpy(inputs)), 0)
+        inputs = self.temperature*inputs
+        return torch.nn.functional.softmax(inputs, 0)
     
     def train(self, num_epochs, iteration):
         self.aggregate_data()
         train_data = DataLoader(self.D, batch_size = 512, shuffle=True)
-        
         for epoch in range(num_epochs):
             running_loss_state, running_loss_reward = 0, 0
             for i, (state, action, reward, state_diff) in enumerate(train_data):
@@ -162,4 +173,32 @@ class MPCAgent(Agent):
             if self.writer is not None:
                 self.writer.add_scalar('loss/state/{}'.format(iteration), running_loss_state, epoch)
                 self.writer.add_scalar('loss/reward/{}'.format(iteration), running_loss_reward, epoch)
-                
+               
+    def REINFORCE(self, trajectory):
+        rewards = [trajectory[i] for i in range(2, len(trajectory), 3)]
+        q_values = torch.tensor(np.cumsum(rewards[::-1])[::-1].copy()).float()
+        q_values = q_values - np.mean(rewards)
+        actions = torch.tensor(np.array(self.action_idx), requires_grad=False).long()
+        logits = torch.stack(self.logits).float()
+        weighted_loss = self.reinforce_criterion(logits.squeeze(), actions)*q_values
+        loss = torch.mean(weighted_loss)    
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
+class RandomAgent():
+    
+    def __init__(self, env, **kwargs):
+        self.env = copy.deepcopy(env)
+        
+    def choose_action(self, state, *a, **kwargs):
+        return self.env.action_space.sample()
+    
+    def REINFORCE(self, trajectory):
+        pass
+    
+    def train(self, a, b):
+        pass
+    
+    def reset_reinforce(self):
+        pass
