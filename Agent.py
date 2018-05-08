@@ -19,7 +19,7 @@ class Agent():
         self.action_dim = 1 if len(env.action_space.shape) == 0 else env.action_space.shape[0]
         self.model = Model(self.observation_dim, self.action_dim, predict_rewards)
         self.predict_rewards = predict_rewards
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.1)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.001)
         self.criterion = torch.nn.MSELoss()
         self.reinforce_criterion = torch.nn.CrossEntropyLoss(reduce=False)
         self.state = env.reset()
@@ -56,8 +56,7 @@ class MPCAgent(Agent):
         self.reward_oracle = RewardOracle(self.env)
         
     def reset_reinforce(self):
-        self.logits = []
-        self.action_idx = []
+        self.log_probs = []
         
     def aggregate_data(self):
         if len(self.D_RL) > 0:
@@ -76,11 +75,11 @@ class MPCAgent(Agent):
             #self.writer.add_scalar('entropy/{}-{}'.format(iteration, traj), entropy(probabilities), t)
         if self.softmax:
             #chosen_trajectory_idx = np.random.choice(list(range(self.K)), p=probabilities.data)
-            chosen_trajectory_idx = Categorical(probabilities.squeeze()).sample()
+            m = Categorical(probabilities.squeeze())
+            chosen_trajectory_idx = m.sample()
+            self.log_probs.append(m.log_prob(chosen_trajectory_idx))
         else:
             chosen_trajectory_idx = np.argmax(probabilities)
-        self.logits.append(probabilities)
-        self.action_idx.append(chosen_trajectory_idx)
         action = trajectories[1][chosen_trajectory_idx].detach().numpy()
         return self.unnormalise_action(action)
         
@@ -176,15 +175,24 @@ class MPCAgent(Agent):
                
     def REINFORCE(self, trajectory):
         rewards = [trajectory[i] for i in range(2, len(trajectory), 3)]
-        q_values = torch.tensor(np.cumsum(rewards[::-1])[::-1].copy()).float()
-        q_values = q_values - np.mean(rewards)
-        actions = torch.tensor(np.array(self.action_idx), requires_grad=False).long()
-        logits = torch.stack(self.logits).float()
-        weighted_loss = self.reinforce_criterion(logits.squeeze(), actions)*q_values
-        loss = torch.mean(weighted_loss)    
+        new_rewards = []
+        R = 0
+        for r in rewards[::-1]:
+            R = r + 0.99*R
+            new_rewards.insert(0, R)
+        
+        rewards = torch.tensor(new_rewards)
+        rewards = (rewards - rewards.mean()) / (rewards.std() + 0.00001)
+        
+        policy_loss = []
+        for log_prob, reward in zip(self.log_probs, rewards):
+            policy_loss.append(-log_prob * reward)
+        policy_loss = torch.stack(policy_loss).sum()
+        
         self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+        policy_loss.backward()
+        self.optimizer.step()        
+        self.reset_reinforce()
         
 class RandomAgent():
     
