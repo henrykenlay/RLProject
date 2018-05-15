@@ -9,7 +9,7 @@ from torch.autograd import Variable
 from RewardOracle import RewardOracle
 from scipy.stats import entropy
 from torch.distributions.categorical import Categorical
-
+eps = np.finfo(np.float32).eps.item()
 
 class Agent():
     
@@ -182,7 +182,7 @@ class MPCAgent(Agent):
             new_rewards.insert(0, R)
         
         rewards = torch.tensor(new_rewards)
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 0.00001)
+        rewards = (rewards - rewards.mean()) / (rewards.std() + eps)
         
         policy_loss = []
         for log_prob, reward in zip(self.log_probs, rewards):

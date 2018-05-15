@@ -54,7 +54,7 @@ for iteration in range(args.agg_iters):
             if done:
                 reward = -1
             trajectory += [state, action, reward]
-            #agent.D_RL.pushTrajectory([state, action, reward, new_state])
+            agent.D_RL.pushTrajectory([state, action, reward, new_state])
             state = new_state
             total_reward += reward
             writer.add_scalar('total_reward/{}-{}'.format(iteration, traj), total_reward, t)
