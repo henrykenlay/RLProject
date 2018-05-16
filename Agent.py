@@ -7,19 +7,18 @@ from Model import Model
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
 from RewardOracle import RewardOracle
-from scipy.stats import entropy
 
 class Agent():
     
     def __init__(self, env, traj_length = 100, num_rolls = 10, predict_rewards = False, writer = None):
         self.env = copy.deepcopy(env)
-        self.observation_dim = env.observation_space.shape[0]
-        self.action_dim = 1 if len(env.action_space.shape) == 0 else env.action_space.shape[0]
-        self.model = Model(self.observation_dim, self.action_dim, predict_rewards)
+        self.action_spec = env.action_spec()
+        state_dim = env.physics.state().shape[0]
+        action_dim = self.action_spec.shape[0]
+        self.model = Model(state_dim, action_dim, predict_rewards)
         self.predict_rewards = predict_rewards
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.001)
         self.criterion = torch.nn.MSELoss()
-        self.state = env.reset()
         self.D_RL = Data()
         self.D_rand = self.get_random_data(num_rolls, traj_length)
         self.writer = writer
@@ -28,20 +27,29 @@ class Agent():
         D = Data()
         print('Generating D_rand')
         for i in tqdm(range(num_rolls)):
-            s0 = self.env.reset()
+            self.env.reset()
+            s0 = self.env.physics.state()
             trajectory = [s0,]
             for i in range(traj_length):
-                action = self.env.action_space.sample()
+                action = self.sample_single_action()
                 trajectory.append(action)
-                observation, reward, done, _ = self.env.step(action)
-                trajectory.append(reward)
-                trajectory.append(observation)
-                if done:
+                timestep = self.env.step(action)
+                trajectory.append(timestep.reward)
+                trajectory.append(self.env.physics.state())
+                if timestep.last():
                     break
             D.pushTrajectory(trajectory)    
         print('Generated {} samples'.format(len(D)))
         return D 
-            
+    
+    def sample_single_action(self):
+        action = np.random.uniform(self.action_spec.minimum, self.action_spec.maximum , self.action_spec.shape[0])
+        return action 
+    
+    def sample_batch_action(self, n):
+        action = np.random.uniform(self.action_spec.minimum, self.action_spec.maximum , (n, self.action_spec.shape[0]))
+        return action
+    
 class MPCAgent(Agent):
     
     def __init__(self, K=10, H=15, softmax = False, temperature = 1, **kwargs):
@@ -54,53 +62,27 @@ class MPCAgent(Agent):
         
     def aggregate_data(self):
         if len(self.D_RL) > 0:
-            self.D = AggregatedData([self.D_rand, self.D_RL], probabilities = [0.1, 0.9])
+            self.D = AggregatedData(self.D_rand, self.D_RL)
         else:
-            self.D = AggregatedData([self.D_rand,])
+            self.D = self.D_rand
         
-    def choose_action(self, state, iteration, traj, t):
+    def choose_action(self, state):
         trajectories = self.generate_trajectories(state)
         trajectory_scores = self.score_trajectories(trajectories)
         probabilities = self._softmax(trajectory_scores)
-        if self.writer is not None:
-            self.writer.add_scalar('entropy/{}-{}'.format(iteration, traj), entropy(probabilities), t)
         if self.softmax:
             chosen_trajectory_idx = np.random.choice(list(range(self.K)), p=probabilities.data)
         else:
             chosen_trajectory_idx = np.argmax(probabilities)
         action = trajectories[1][chosen_trajectory_idx]
-        return self.unnormalise_action(action)
-        
-    def normalise_state(self, state):
-        state = (state - self.D.means[0])/self.D.stds[0]
-        return state
-    
-    def unnormalise_state(self, state):
-        state = state*self.D.stds[0] + self.D.means[0]
-        return state
-    
-    def normalise_action(self, action):
-        action = (action - self.D.means[1])/self.D.stds[1]
         return action
-    
-    def unnormalise_action(self, action):
-        action = action*self.D.stds[1] + self.D.means[1]
-        return action
-    
-    def normalise_reward(self, reward):
-        reward = (reward - self.D.means[2])/self.D.stds[2]
-        return reward
-    
-    def unnormalise_reward(self, reward):
-        reward = reward*self.D.stds[2] + self.D.means[2]
-        return reward
 
     def generate_trajectories(self, state):
-        states = np.expand_dims(self.normalise_state(state), 0).repeat(self.K, 0) # matrix of size K * state_dimensions, each row is the state
+        states = np.expand_dims(state, 0).repeat(self.K, 0) # matrix of size K * state_dimensions, each row is the state
         trajectories = [states, ]
         for _ in range(self.H):
             # sample actions
-            actions = np.stack([self.normalise_action(self.env.action_space.sample()) for _ in range(self.K)])
+            actions = self.sample_batch_action(self.K)
             
             # infer with model
             state_vars = Variable(torch.from_numpy(states).float())
@@ -109,8 +91,7 @@ class MPCAgent(Agent):
                 s_diff, rewards = self.model(state_vars, action_vars)
                 s_diff, rewards = s_diff.data.numpy(), rewards.data.numpy().squeeze()
             else:
-                rewards = self.reward_oracle.reward(self.unnormalise_state(states), self.unnormalise_action(actions))
-                rewards = self.normalise_reward(rewards)
+                rewards = self.reward_oracle.reward(states, actions)
                 s_diff = self.model(state_vars, action_vars).data.numpy()
 
             # update trajectory
@@ -124,7 +105,7 @@ class MPCAgent(Agent):
     def score_trajectories(self, trajectories):
         rewards = np.zeros((self.K,))
         for reward_idx in range(2, len(trajectories), 3):
-            rewards += self.unnormalise_reward(trajectories[reward_idx])
+            rewards += trajectories[reward_idx]
         return rewards
     
     def _softmax(self, inputs):
@@ -135,7 +116,7 @@ class MPCAgent(Agent):
         self.aggregate_data()
         train_data = DataLoader(self.D, batch_size = 512, shuffle=True)
         
-        for epoch in range(num_epochs):
+        for epoch in tqdm(range(num_epochs)):
             running_loss_state, running_loss_reward = 0, 0
             for i, (state, action, reward, state_diff) in enumerate(train_data):
                 state = Variable(state)
