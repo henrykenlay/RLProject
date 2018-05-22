@@ -143,4 +143,44 @@ class MPCAgent(Agent):
             if self.writer is not None:
                 self.writer.add_scalar('loss/state/{}'.format(iteration), running_loss_state, epoch)
                 self.writer.add_scalar('loss/reward/{}'.format(iteration), running_loss_reward, epoch)
+                validation_loss = self.validation_loss()
+                self.writer.add_scalar('loss/state_eq3/{}'.format(iteration), validation_loss[0], epoch)
+                self.writer.add_scalar('loss/reward_eq3/{}'.format(iteration), validation_loss[1], epoch)
                 
+                
+    def validation_loss(self):
+        self.env.reset()
+        state_scores = []
+        reward_scores = []
+        for _ in range(100):
+            trajectories = self.generate_trajectories(self.env.physics.state())
+            trajectory_scores = self.score_trajectories(trajectories)
+            probabilities = self._softmax(trajectory_scores)
+            if self.softmax:
+                chosen_trajectory_idx = np.random.choice(list(range(self.K)), p=probabilities.data)
+            else:
+                chosen_trajectory_idx = np.argmax(probabilities)
+            actions = [trajectories[i][chosen_trajectory_idx] for i in range(1, len(trajectories), 3)]
+            predicted_states = [trajectories[i][chosen_trajectory_idx] for i in range(0, len(trajectories), 3)][1:]
+            predicted_rewards = [trajectories[i][chosen_trajectory_idx] for i in range(2, len(trajectories), 3)]
+            states = []
+            rewards = []
+            for action in actions:
+                timestep = self.env.step(action)
+                rewards.append(timestep.reward)
+                states.append(self.env.physics.state())
+            state_scores.append(self.compare_trajectories(states, predicted_states))
+            reward_scores.append(np.mean(np.square(np.array(rewards)-np.array(predicted_rewards))))
+        return np.mean(state_scores), np.mean(reward_scores)
+            
+    def compare_trajectories(self, states, predicted_states):
+        score = np.array(predicted_states) - np.array(states)
+        score = np.mean(np.sum(np.square(score), 0)/2)
+        return score
+            
+if __name__ == '__main__':
+    from dm_control import suite
+    env = suite.load('cheetah', 'run')
+    agent = MPCAgent(env = env)
+    agent.validation_loss()
+    
