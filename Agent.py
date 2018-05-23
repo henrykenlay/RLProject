@@ -7,6 +7,10 @@ from Model import Model
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
 from RewardOracle import RewardOracle
+from torch.distributions.categorical import Categorical
+from torch.nn.utils.clip_grad import clip_grad_norm_
+
+eps = np.finfo(np.float32).eps.item()
 
 class Agent():
     
@@ -17,7 +21,7 @@ class Agent():
         action_dim = self.action_spec.shape[0]
         self.model = Model(state_dim, action_dim, predict_rewards)
         self.predict_rewards = predict_rewards
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.001)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.01)
         self.criterion = torch.nn.MSELoss()
         self.D_RL = Data()
         self.D_rand = self.get_random_data(num_rolls, traj_length)
@@ -59,6 +63,7 @@ class MPCAgent(Agent):
         self.temperature = temperature
         self.softmax = softmax
         self.reward_oracle = RewardOracle(self.env)
+        self.log_probs = []
         
     def aggregate_data(self):
         if len(self.D_RL) > 0:
@@ -67,50 +72,56 @@ class MPCAgent(Agent):
             self.D = self.D_rand
         
     def choose_action(self, state):
+        state = torch.tensor(state, requires_grad=True).float()
         trajectories = self.generate_trajectories(state)
-        trajectory_scores = self.score_trajectories(trajectories)
+        trajectory_scores = self.score_trajectories(trajectories).squeeze()
         probabilities = self._softmax(trajectory_scores)
+        m = Categorical(probabilities.squeeze())
         if self.softmax:
-            chosen_trajectory_idx = np.random.choice(list(range(self.K)), p=probabilities.data)
+            chosen_trajectory_idx = m.sample()   
         else:
-            chosen_trajectory_idx = np.argmax(probabilities)
-        action = trajectories[1][chosen_trajectory_idx]
+            chosen_trajectory_idx = torch.argmax(probabilities)
+        self.log_probs.append(m.log_prob(chosen_trajectory_idx))
+        action = trajectories[1][chosen_trajectory_idx].detach().numpy()
         return action
-
+    
     def generate_trajectories(self, state):
-        states = np.expand_dims(state, 0).repeat(self.K, 0) # matrix of size K * state_dimensions, each row is the state
+        states = state.unsqueeze(0).repeat(self.K, 1) # matrix of size K * state_dimensions, each row is the state
         trajectories = [states, ]
         for _ in range(self.H):
             # sample actions
             actions = self.sample_batch_action(self.K)
+            actions = torch.tensor(actions, requires_grad=True).float()
             
             # infer with model
-            state_vars = Variable(torch.from_numpy(states).float())
-            action_vars = Variable(torch.from_numpy(actions).float())
             if self.predict_rewards:
-                s_diff, rewards = self.model(state_vars, action_vars)
-                s_diff, rewards = s_diff.data.numpy(), rewards.data.numpy().squeeze()
+                s_diff, rewards = self.model(states, actions)
+                assert torch.sum(torch.isnan(s_diff)) == 0
+                assert torch.sum(torch.isnan(rewards)) == 0
             else:
-                rewards = self.reward_oracle.reward(states, actions)
-                s_diff = self.model(state_vars, action_vars).data.numpy()
-
+                s_diff = None
+                # TODO: this is probably broken now
+                # rewards = self.reward_oracle.reward(self.unnormalise_state(states), self.unnormalise_action(actions))
+                # rewards = self.normalise_reward(rewards)
+                # s_diff = self.model(state_vars, action_vars).data.numpy()
             # update trajectory
+            
             states = states + s_diff
             trajectories.append(actions)
             trajectories.append(rewards)
             trajectories.append(states)
-
+            
         return trajectories
 
     def score_trajectories(self, trajectories):
-        rewards = np.zeros((self.K,))
+        rewards = torch.zeros((self.K, 1), requires_grad=True)
         for reward_idx in range(2, len(trajectories), 3):
-            rewards += trajectories[reward_idx]
+            rewards = rewards + trajectories[reward_idx]
         return rewards
     
     def _softmax(self, inputs):
-        inputs = self.temperature*np.array(inputs)
-        return torch.nn.functional.softmax(Variable(torch.from_numpy(inputs)), 0)
+        inputs = self.temperature*inputs
+        return torch.nn.functional.softmax(inputs, 0)
     
     def train(self, num_epochs, iteration):
         self.aggregate_data()
@@ -152,17 +163,22 @@ class MPCAgent(Agent):
         self.env.reset()
         state_scores = []
         reward_scores = []
-        for _ in range(100):
-            trajectories = self.generate_trajectories(self.env.physics.state())
+        for _ in range(8):
+            state = torch.tensor(self.env.physics.state()).float()
+            trajectories = self.generate_trajectories(state)
             trajectory_scores = self.score_trajectories(trajectories)
             probabilities = self._softmax(trajectory_scores)
+            m = Categorical(probabilities.squeeze())
             if self.softmax:
-                chosen_trajectory_idx = np.random.choice(list(range(self.K)), p=probabilities.data)
+                chosen_trajectory_idx = m.sample()     
             else:
-                chosen_trajectory_idx = np.argmax(probabilities)
+                chosen_trajectory_idx = torch.argmax(probabilities)
             actions = [trajectories[i][chosen_trajectory_idx] for i in range(1, len(trajectories), 3)]
             predicted_states = [trajectories[i][chosen_trajectory_idx] for i in range(0, len(trajectories), 3)][1:]
             predicted_rewards = [trajectories[i][chosen_trajectory_idx] for i in range(2, len(trajectories), 3)]
+            actions = [action.detach().numpy() for action in actions]
+            predicted_states = [state.detach().numpy() for state in predicted_states]
+            predicted_rewards = [float(reward) for reward in predicted_rewards]
             states = []
             rewards = []
             for action in actions:
@@ -177,6 +193,34 @@ class MPCAgent(Agent):
         score = np.array(predicted_states) - np.array(states)
         score = np.mean(np.sum(np.square(score), 0)/2)
         return score
+    
+    def REINFORCE(self, rewards):
+        new_rewards = []
+        R = 0
+        for r in rewards[::-1]:
+            R = r + 0.99*R
+            new_rewards.insert(0, R)
+        
+        rewards = torch.tensor(new_rewards)
+        rewards = (rewards - rewards.mean()) / (rewards.std() + eps)
+        
+        policy_loss = []
+        assert len(self.log_probs) == len(rewards)
+        
+        #for log_prob, reward in zip(self.log_probs, rewards):
+        #    policy_loss.append(-log_prob * reward)
+        #policy_loss = torch.stack(policy_loss).sum()
+        
+        for log_prob, reward in zip(self.log_probs, rewards):
+            policy_loss = -log_prob * reward
+            self.optimizer.zero_grad()
+            policy_loss.backward()
+            self.optimizer.step()    
+            
+        #self.optimizer.zero_grad()
+        #policy_loss.backward()
+        #self.optimizer.step()        
+        self.log_probs = []
             
 if __name__ == '__main__':
     from dm_control import suite
