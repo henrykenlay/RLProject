@@ -9,7 +9,7 @@ from datetime import datetime
 from Recorder import Recorder
 
 parser = argparse.ArgumentParser(description='Train a model using MPC')
-parser.add_argument('--environment', default='cartpole-balance', help='Environment to train the agent on')
+parser.add_argument('--environment', default='cheetah-run', help='Environment to train the agent on')
 parser.add_argument('--experiment-name', default=None, help='Will save the model as [envname]-[suffix] if given')
 parser.add_argument("--softmax", default=False, action="store_true",  help="Use softmax MPC")
 parser.add_argument("--agg-iters", default=100, type=int, help="Aggregation iterations")
@@ -34,7 +34,7 @@ writer = SummaryWriter(log_dir=os.path.join('logs', args.experiment_name))
 env = suite.load(*args.environment.split('-')) 
 
 # Create model
-agent = MPCAgent(env = env, H = args.H, K = args.K, traj_length = args.traj_length, softmax = args.softmax, predict_rewards = args.predict_reward, writer=writer)
+agent = MPCAgent(env = env, H = args.H, K = args.K, traj_length = args.traj_length, softmax = args.softmax, predict_rewards = args.predict_reward, writer=writer, reinforce = args.reinforce)
 
 count = 0
 for iteration in range(args.agg_iters):
@@ -44,7 +44,7 @@ for iteration in range(args.agg_iters):
         rewards = []
         if args.record:
             recorder = Recorder(args.experiment_name, count)
-        for t in tqdm(range(args.traj_length)):
+        for t in tqdm(range(args.traj_length), desc='Generating episode'):
             if args.record:
                 recorder.record_frame(env.physics.render(camera_id=0), t)
             state = env.physics.state()
@@ -55,7 +55,8 @@ for iteration in range(args.agg_iters):
             rewards.append(reward)
         print('Trajectory done. Total reward: {}'.format(sum(rewards)))
         writer.add_scalar('total_reward', sum(rewards), count)
-        agent.REINFORCE(rewards)
+        if args.reinforce:
+            agent.REINFORCE(rewards)
         if args.record:
             recorder.make_movie()
         count += 1

@@ -5,12 +5,18 @@ from tqdm import tqdm
 from Data import Data, AggregatedData
 from Model import Model
 from torch.utils.data import DataLoader
-from torch.autograd import Variable
 from RewardOracle import RewardOracle
 from torch.distributions.categorical import Categorical
 from torch.nn.utils.clip_grad import clip_grad_norm_
 
 eps = np.finfo(np.float32).eps.item()
+if torch.cuda.is_available():
+    print('USING GPU')
+    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    using_gpu = True
+else:
+    using_gpu = False
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class Agent():
     
@@ -20,8 +26,11 @@ class Agent():
         state_dim = env.physics.state().shape[0]
         action_dim = self.action_spec.shape[0]
         self.model = Model(state_dim, action_dim, predict_rewards)
+        if using_gpu:
+            self.model = self.model.to(device)
         self.predict_rewards = predict_rewards
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.01)
+        self.optimizer_reinforce = torch.optim.Adam(self.model.parameters(), lr = 0.00001)
         self.criterion = torch.nn.MSELoss()
         self.D_RL = Data()
         self.D_rand = self.get_random_data(num_rolls, traj_length)
@@ -29,8 +38,7 @@ class Agent():
 
     def get_random_data(self, num_rolls, traj_length):
         D = Data()
-        print('Generating D_rand')
-        for i in tqdm(range(num_rolls)):
+        for i in tqdm(range(num_rolls), desc='Generating D_rand'):
             self.env.reset()
             s0 = self.env.physics.state()
             trajectory = [s0,]
@@ -56,14 +64,17 @@ class Agent():
     
 class MPCAgent(Agent):
     
-    def __init__(self, K=10, H=15, softmax = False, temperature = 1, **kwargs):
+    def __init__(self, K=10, H=15, softmax = False, temperature = 10, reinforce = False, **kwargs):
         super(MPCAgent, self).__init__(**kwargs)
         self.K = K
         self.H = H
         self.temperature = temperature
         self.softmax = softmax
         self.reward_oracle = RewardOracle(self.env)
-        self.log_probs = []
+        self.reinforce = reinforce
+        if reinforce:
+            self.log_probs = []
+
         
     def aggregate_data(self):
         if len(self.D_RL) > 0:
@@ -81,8 +92,13 @@ class MPCAgent(Agent):
             chosen_trajectory_idx = m.sample()   
         else:
             chosen_trajectory_idx = torch.argmax(probabilities)
-        self.log_probs.append(m.log_prob(chosen_trajectory_idx))
-        action = trajectories[1][chosen_trajectory_idx].detach().numpy()
+        if self.reinforce:
+            self.log_probs.append(m.log_prob(chosen_trajectory_idx))
+        if using_gpu:
+            action = trajectories[1][chosen_trajectory_idx].cpu().detach().numpy()
+        else:
+            action = trajectories[1][chosen_trajectory_idx].detach().numpy()
+        
         return action
     
     def generate_trajectories(self, state):
@@ -92,7 +108,10 @@ class MPCAgent(Agent):
             # sample actions
             actions = self.sample_batch_action(self.K)
             actions = torch.tensor(actions, requires_grad=True).float()
-            
+            if using_gpu:
+                actions = actions.cuda().to(device)
+                states = states.cuda().to(device)
+
             # infer with model
             if self.predict_rewards:
                 s_diff, rewards = self.model(states, actions)
@@ -125,15 +144,20 @@ class MPCAgent(Agent):
     
     def train(self, num_epochs, iteration):
         self.aggregate_data()
-        train_data = DataLoader(self.D, batch_size = 512, shuffle=True)
+        train_data = DataLoader(self.D, batch_size = 512, shuffle=False, pin_memory=True)
         
-        for epoch in tqdm(range(num_epochs)):
+        for epoch in tqdm(range(num_epochs), desc='Fitting NN'):
             running_loss_state, running_loss_reward = 0, 0
             for i, (state, action, reward, state_diff) in enumerate(train_data):
-                state = Variable(state)
-                action = Variable(action)
-                state_diff = Variable(state_diff, requires_grad=False)
-                reward = Variable(reward.float(), requires_grad=False)
+                
+                state = torch.tensor(state)
+                action = torch.tensor(action)
+                state_diff = torch.tensor(state_diff, requires_grad=False)
+                reward = torch.tensor(reward.float(), requires_grad=False)
+                
+                if using_gpu:
+                    state, action, state_diff, reward = state.cuda().to(device), action.cuda().to(device), state_diff.cuda().to(device), reward.cuda().to(device)
+
                 if self.predict_rewards:
                     state_diff_hat, reward_hat = self.model(state, action)
                 else:
@@ -165,6 +189,8 @@ class MPCAgent(Agent):
         reward_scores = []
         for _ in range(8):
             state = torch.tensor(self.env.physics.state()).float()
+            if using_gpu:
+                state.to(device)
             trajectories = self.generate_trajectories(state)
             trajectory_scores = self.score_trajectories(trajectories)
             probabilities = self._softmax(trajectory_scores)
@@ -176,8 +202,13 @@ class MPCAgent(Agent):
             actions = [trajectories[i][chosen_trajectory_idx] for i in range(1, len(trajectories), 3)]
             predicted_states = [trajectories[i][chosen_trajectory_idx] for i in range(0, len(trajectories), 3)][1:]
             predicted_rewards = [trajectories[i][chosen_trajectory_idx] for i in range(2, len(trajectories), 3)]
-            actions = [action.detach().numpy() for action in actions]
-            predicted_states = [state.detach().numpy() for state in predicted_states]
+            if using_gpu:
+                actions = [action.cpu().detach().numpy() for action in actions]
+                predicted_states = [state.cpu().detach().numpy() for state in predicted_states]
+            else:
+                actions = [action.detach().numpy() for action in actions]
+                predicted_states = [state.detach().numpy() for state in predicted_states]
+            
             predicted_rewards = [float(reward) for reward in predicted_rewards]
             states = []
             rewards = []
@@ -195,6 +226,7 @@ class MPCAgent(Agent):
         return score
     
     def REINFORCE(self, rewards):
+        assert self.reinforce
         new_rewards = []
         R = 0
         for r in rewards[::-1]:
@@ -206,25 +238,13 @@ class MPCAgent(Agent):
         
         policy_loss = []
         assert len(self.log_probs) == len(rewards)
-        
-        #for log_prob, reward in zip(self.log_probs, rewards):
-        #    policy_loss.append(-log_prob * reward)
-        #policy_loss = torch.stack(policy_loss).sum()
-        
-        for log_prob, reward in zip(self.log_probs, rewards):
+
+        for log_prob, reward in tqdm(zip(self.log_probs, rewards), desc='REINFORCE', total = len(rewards)):
             policy_loss = -log_prob * reward
-            self.optimizer.zero_grad()
+            policy_loss.to(device)
+            self.optimizer_reinforce.zero_grad()
             policy_loss.backward()
-            self.optimizer.step()    
-            
-        #self.optimizer.zero_grad()
-        #policy_loss.backward()
-        #self.optimizer.step()        
+            self.optimizer_reinforce.step()          
         self.log_probs = []
             
-if __name__ == '__main__':
-    from dm_control import suite
-    env = suite.load('cheetah', 'run')
-    agent = MPCAgent(env = env)
-    agent.validation_loss()
     
