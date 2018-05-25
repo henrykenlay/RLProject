@@ -20,6 +20,7 @@ parser.add_argument("--H", default=10, type=int, help="Horizon of the MPC contro
 parser.add_argument("--K", default=100, type=int, help="Number of random rollouts of the MPC controller")
 parser.add_argument("--predict-reward", default=True, action="store_true", help="Use model to predict reward")
 parser.add_argument("--reinforce", default=False, action="store_true", help="Use model to predict reward")
+parser.add_argument("--record", default=False, action="store_true", help="Make movies of agent")
 args = parser.parse_args()
 
 # create logs
@@ -41,23 +42,22 @@ for iteration in range(args.agg_iters):
     for traj in range(args.traj_per_agg):
         timestep = env.reset()
         rewards = []
-        recorder = Recorder(args.experiment_name, count)
+        if args.record:
+            recorder = Recorder(args.experiment_name, count)
         for t in tqdm(range(args.traj_length)):
-            recorder.record_frame(env.physics.render(camera_id=0), t)
+            if args.record:
+                recorder.record_frame(env.physics.render(camera_id=0), t)
             state = env.physics.state()
             action = agent.choose_action(state)
             timestep = env.step(action)
             new_state, reward = env.physics.state(), timestep.reward
             agent.D_RL.pushTrajectory([state, action, reward, new_state])
             rewards.append(reward)
-            #if t == 0:
-            #    agent.log_probs = []
-            #elif t%50 == 0 and args.reinforce:
-            #    agent.REINFORCE(rewards[-50:])
         print('Trajectory done. Total reward: {}'.format(sum(rewards)))
         writer.add_scalar('total_reward', sum(rewards), count)
         agent.REINFORCE(rewards)
-        recorder.make_movie()
+        if args.record:
+            recorder.make_movie()
         count += 1
         
 
