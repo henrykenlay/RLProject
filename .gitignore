@@ -1,3 +1,13 @@
+# docker files
+docker*
+Dockerfile
+
+# logs
+logs
+
+# tempfiles
+._*
+
 # DS_Store
 *.DS_Store
 
