@@ -64,7 +64,7 @@ ENV LD_PRELOAD /usr/lib/x86_64-linux-gnu/libGLEW.so.1.13:/usr/lib/nvidia-367/lib
 
 RUN pip install Cython
 RUN pip install git+git://github.com/deepmind/dm_control.git
-RUN pip install tqdm tensorboardX
+RUN pip install tqdm tensorboardX pandas
 
 ENV PYTHONPATH "$PYTHONPATH:/project/"
 # }}
