@@ -7,7 +7,6 @@ from Model import Model
 from torch.utils.data import DataLoader
 from RewardOracle import RewardOracle
 from torch.distributions.categorical import Categorical
-from torch.nn.utils.clip_grad import clip_grad_norm_
 
 eps = np.finfo(np.float32).eps.item()
 if torch.cuda.is_available():
@@ -20,7 +19,9 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class Agent():
     
-    def __init__(self, env, traj_length = 100, num_rolls = 10, predict_rewards = False, writer = None):
+    def __init__(self, env, traj_length = 100, num_rolls = 10, predict_rewards = False, 
+                 writer = None, K=10, H=15, softmax = False, temperature = 10, reinforce = False,
+                 lr = 0.0001):
         self.env = copy.deepcopy(env)
         self.action_spec = env.action_spec()
         state_dim = env.physics.state().shape[0]
@@ -29,12 +30,21 @@ class Agent():
         if using_gpu:
             self.model = self.model.to(device)
         self.predict_rewards = predict_rewards
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr = 0.01)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr = lr)
         self.optimizer_reinforce = torch.optim.Adam(self.model.parameters(), lr = 0.00001)
         self.criterion = torch.nn.MSELoss()
         self.D_RL = Data()
         self.D_rand = self.get_random_data(num_rolls, traj_length)
         self.writer = writer
+        self.K = K
+        self.H = H
+        self.temperature = temperature
+        self.softmax = softmax
+        self.reward_oracle = RewardOracle(self.env)
+        self.reinforce = reinforce
+        if reinforce:
+            self.reinforce_gradients = []
+            #self.log_probs = []
 
     def get_random_data(self, num_rolls, traj_length):
         D = Data()
@@ -61,20 +71,6 @@ class Agent():
     def sample_batch_action(self, n):
         action = np.random.uniform(self.action_spec.minimum, self.action_spec.maximum , (n, self.action_spec.shape[0]))
         return action
-    
-class MPCAgent(Agent):
-    
-    def __init__(self, K=10, H=15, softmax = False, temperature = 10, reinforce = False, **kwargs):
-        super(MPCAgent, self).__init__(**kwargs)
-        self.K = K
-        self.H = H
-        self.temperature = temperature
-        self.softmax = softmax
-        self.reward_oracle = RewardOracle(self.env)
-        self.reinforce = reinforce
-        if reinforce:
-            self.log_probs = []
-
         
     def aggregate_data(self):
         if len(self.D_RL) > 0:
@@ -93,13 +89,23 @@ class MPCAgent(Agent):
         else:
             chosen_trajectory_idx = torch.argmax(probabilities)
         if self.reinforce:
-            self.log_probs.append(m.log_prob(chosen_trajectory_idx))
+            log_prob = m.log_prob(chosen_trajectory_idx)
+            #log_prob.to(device)
+            #log_prob.backward()
+            #self.log_probs.append(log_prob)
+            self.save_reinforce_gradients(log_prob)
         if using_gpu:
             action = trajectories[1][chosen_trajectory_idx].cpu().detach().numpy()
         else:
             action = trajectories[1][chosen_trajectory_idx].detach().numpy()
         
         return action
+    
+    def save_reinforce_gradients(self, log_prob):
+        self.optimizer_reinforce.zero_grad()
+        log_prob.to(device)
+        log_prob.backward()
+        self.reinforce_gradients.append([i.grad.clone() for i in self.model.parameters()])
     
     def generate_trajectories(self, state):
         states = state.unsqueeze(0).repeat(self.K, 1) # matrix of size K * state_dimensions, each row is the state
@@ -138,8 +144,10 @@ class MPCAgent(Agent):
             rewards = rewards + trajectories[reward_idx]
         return rewards
     
-    def _softmax(self, inputs):
-        inputs = self.temperature*inputs
+    def _softmax(self, inputs, temperature = None):
+        if temperature is None:
+            temperature = self.temperature
+        inputs = temperature*inputs
         return torch.nn.functional.softmax(inputs, 0)
     
     def train(self, num_epochs, iteration):
@@ -236,15 +244,17 @@ class MPCAgent(Agent):
         rewards = torch.tensor(new_rewards)
         rewards = (rewards - rewards.mean()) / (rewards.std() + eps)
         
-        policy_loss = []
-        assert len(self.log_probs) == len(rewards)
+        assert len(self.reinforce_gradients) == len(rewards)
 
-        for log_prob, reward in tqdm(zip(self.log_probs, rewards), desc='REINFORCE', total = len(rewards)):
-            policy_loss = -log_prob * reward
-            policy_loss.to(device)
+        for reinforce_gradient, reward in tqdm(zip(self.reinforce_gradients, rewards), desc='REINFORCE', total = len(rewards)):
+            #policy_loss = -log_prob * reward
+            #policy_loss.to(device)
+            #self.optimizer_reinforce.zero_grad()
+            #policy_loss.backward()
             self.optimizer_reinforce.zero_grad()
-            policy_loss.backward()
+            for p, g in zip(self.model.parameters(), reinforce_gradient):
+                p.grad = -reward*g
             self.optimizer_reinforce.step()          
-        self.log_probs = []
+        self.reinforce_gradients = []
             
     
