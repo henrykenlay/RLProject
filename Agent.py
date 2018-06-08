@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import copy
+import os
 from tqdm import tqdm
 from Data import Data, AggregatedData
 from Model import Model
@@ -42,6 +43,7 @@ class Agent():
         self.softmax = softmax
         self.reward_oracle = RewardOracle(self.env)
         self.reinforce = reinforce
+        self.best_total_reward = 0
         if reinforce:
             self.reinforce_gradients = []
             #self.log_probs = []
@@ -256,5 +258,17 @@ class Agent():
                 p.grad = -reward*g
             self.optimizer_reinforce.step()          
         self.reinforce_gradients = []
+        
+    def saveifbest(self, total_reward, experiment_name):
+        os.makedirs('project/weights', exist_ok=True)
+        path = 'project/weights/{}.weights'.format(experiment_name)
+        if total_reward > self.best_total_reward:
+            self.best_total_reward = total_reward
+            torch.save(self.model.state_dict(), path)
+            
+    def loadbest(self, experiment_name):
+        path = 'project/weights/{}.weights'.format(experiment_name)
+        self.model.load_state_dict(torch.load(path))
+        
             
     

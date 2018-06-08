@@ -60,6 +60,7 @@ for iteration in range(args.agg_iters):
         val_loss = agent.validation_loss()
         logger.log([count, sum(rewards), val_loss[0], val_loss[1]])
         print(count, sum(rewards), val_loss[0], val_loss[1])
+        agent.saveifbest(sum(rewards), args.experiment_name)
         if args.reinforce:
             agent.REINFORCE(rewards)
         if args.record:
