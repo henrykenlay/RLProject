@@ -232,7 +232,7 @@ class Agent():
             
     def compare_trajectories(self, states, predicted_states):
         score = np.array(predicted_states) - np.array(states)
-        score = np.mean(np.sum(np.square(score), 0)/2)
+        score = np.mean(np.sum(np.square(score), 0))
         return score
     
     def REINFORCE(self, rewards):
