@@ -18,10 +18,14 @@ parser.add_argument("--traj-per-agg", default=9, type=int, help="Number of rollo
 parser.add_argument("--traj-length", default=1000, type=int, help="Length of rollouts")
 parser.add_argument("--num-epochs", default=60, type=int, help="Number of epochs to train model")
 parser.add_argument("--lr", default=0.001, type=float, help="Learning rate")
+parser.add_argument("--reinforce-lr", default=10e-8, type=float, help="Learning rate for REINFORCE")
 parser.add_argument("--H", default=20, type=int, help="Horizon of the MPC controller")
 parser.add_argument("--K", default=1000, type=int, help="Number of random rollouts of the MPC controller")
+parser.add_argument("--hidden-units", default=500, type=int, help="Number of neurons in hidden layers")
 parser.add_argument("--predict-reward", default=True, action="store_true", help="Use model to predict reward")
 parser.add_argument("--reinforce", default=False, action="store_true", help="Use model to predict reward")
+parser.add_argument("--reinforce-batchsize", default=1, type=int, help="Batch size of REINFORCE updates")
+parser.add_argument("--reinforce-shuffle", default=False, action="store_true", help="Shuffle REINFORCE samples from episode")
 parser.add_argument("--record", default=False, action="store_true", help="Make movies of agent")
 
 
@@ -36,7 +40,12 @@ logger = Logger('project/logs', args.experiment_name)
 env = suite.load(*args.environment.split('-')) 
 
 # Create model
-agent = Agent(env = env, H = args.H, K = args.K, traj_length = args.traj_length, softmax = args.softmax, predict_rewards = args.predict_reward, writer=writer, reinforce = args.reinforce, lr = args.lr, temperature = args.temperature)
+agent = Agent(env = env, H = args.H, K = args.K, traj_length = args.traj_length, 
+              softmax = args.softmax, predict_rewards = args.predict_reward, 
+              writer=writer, reinforce = args.reinforce, lr = args.lr, 
+              temperature = args.temperature, reinforce_lr = args.reinforce_lr,
+              hidden_units = args.hidden_units, batch_size = args.reinforce_batchsize,
+              shuffle_gradients = args.reinforce_shuffle)
 
 count = 0
 for iteration in range(args.agg_iters):
@@ -60,7 +69,7 @@ for iteration in range(args.agg_iters):
         val_loss = agent.validation_loss()
         logger.log([count, sum(rewards), val_loss[0], val_loss[1]])
         print(count, sum(rewards), val_loss[0], val_loss[1])
-        agent.saveifbest(sum(rewards), args.experiment_name)
+        #agent.saveifbest(sum(rewards), args.experiment_name)
         if args.reinforce:
             agent.REINFORCE(rewards)
         if args.record:
