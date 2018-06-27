@@ -11,9 +11,11 @@ else
   cmd=docker
 fi
 
-NV_GPU="$gpu" ${cmd} run -it \
+dt=$(date '+%d-%m-%Y-%H-%M-%S');
+
+NV_GPU="$gpu" ${cmd} run -d \
         --net host \
-        --name henry-$gpu \
+        --name henryy-$gpu-$dt \
         -v `pwd`/:$DIR:rw \
         -t henry \
         $@
