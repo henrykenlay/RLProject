@@ -22,17 +22,17 @@ class Agent():
     
     def __init__(self, env, traj_length = 100, num_rolls = 10, predict_rewards = False, 
                  writer = None, K=10, H=15, softmax = False, temperature = 10, reinforce = False,
-                 lr = 0.0001):
+                 lr = 10e-5, reinforce_lr = 10e-8, hidden_units = 500, batch_size=1, shuffle_gradients=False):
         self.env = copy.deepcopy(env)
         self.action_spec = env.action_spec()
         state_dim = env.physics.state().shape[0]
         action_dim = self.action_spec.shape[0]
-        self.model = Model(state_dim, action_dim, predict_rewards)
+        self.model = Model(state_dim, action_dim, predict_rewards, hidden_units)
         if using_gpu:
             self.model = self.model.to(device)
         self.predict_rewards = predict_rewards
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr = lr)
-        self.optimizer_reinforce = torch.optim.Adam(self.model.parameters(), lr = 0.00001)
+        self.optimizer_reinforce = torch.optim.Adam(self.model.parameters(), lr = reinforce_lr)
         self.criterion = torch.nn.MSELoss()
         self.D_RL = Data()
         self.D_rand = self.get_random_data(num_rolls, traj_length)
@@ -46,7 +46,8 @@ class Agent():
         self.best_total_reward = 0
         if reinforce:
             self.reinforce_gradients = []
-            #self.log_probs = []
+        self.batch_size = batch_size
+        self.shuffle_gradients = shuffle_gradients
 
     def get_random_data(self, num_rolls, traj_length):
         D = Data()
@@ -244,20 +245,33 @@ class Agent():
             new_rewards.insert(0, R)
         
         rewards = torch.tensor(new_rewards)
+        print('rewards std', rewards.std(), eps)
         rewards = (rewards - rewards.mean()) / (rewards.std() + eps)
-        
         assert len(self.reinforce_gradients) == len(rewards)
-
-        for reinforce_gradient, reward in tqdm(zip(self.reinforce_gradients, rewards), desc='REINFORCE', total = len(rewards)):
-            #policy_loss = -log_prob * reward
-            #policy_loss.to(device)
-            #self.optimizer_reinforce.zero_grad()
-            #policy_loss.backward()
-            self.optimizer_reinforce.zero_grad()
+        
+        # updates
+        grad_idxs = list(range(len(self.reinforce_gradients)))
+        if self.shuffle_gradients:
+            np.random.shuffle(grad_idxs)
+            
+        self.optimizer_reinforce.zero_grad()
+        for i, grad_idx in enumerate(grad_idxs):
+            reinforce_gradient, reward = self.reinforce_gradients[i], rewards[i]
             for p, g in zip(self.model.parameters(), reinforce_gradient):
                 p.grad = -reward*g
-            self.optimizer_reinforce.step()          
-        self.reinforce_gradients = []
+            
+            if i%self.batch_size == 0:
+                self.optimizer_reinforce.step() 
+                self.optimizer_reinforce.zero_grad()
+                
+        self.reinforce_gradients = []    
+        
+        #for reinforce_gradient, reward in tqdm(zip(self.reinforce_gradients, rewards), desc='REINFORCE', total = len(rewards)):
+        #    self.optimizer_reinforce.zero_grad()
+        #    for p, g in zip(self.model.parameters(), reinforce_gradient):
+        #        p.grad = -reward*g
+        #    self.optimizer_reinforce.step() 
+        #self.reinforce_gradients = []
         
     def saveifbest(self, total_reward, experiment_name):
         os.makedirs('project/weights', exist_ok=True)
@@ -270,5 +284,4 @@ class Agent():
         path = 'project/weights/{}.weights'.format(experiment_name)
         self.model.load_state_dict(torch.load(path))
         
-            
     
